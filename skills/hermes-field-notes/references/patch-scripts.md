@@ -1,7 +1,7 @@
 # Writing a patch that survives `hermes update`
 
 `hermes update` replaces the core tree: every local edit is gone unless something re-applies it.
-Keep each edit as a small, idempotent script outside the core (for example in a folder you version
+Ready recipes for known problems: `patch-recipes.md`. Keep each edit as a small, idempotent script outside the core (for example in a folder you version
 yourself), and register it with a patch note so the skill can tell when it is missing.
 
 ## Rules that proved themselves

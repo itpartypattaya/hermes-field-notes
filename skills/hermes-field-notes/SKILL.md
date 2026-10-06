@@ -1,7 +1,7 @@
 ---
 name: hermes-field-notes
 description: "Hermes pitfalls and core patches: search, record, verify."
-version: 1.1.0
+version: 1.2.0
 author: "Anton Vaskov (itpartypattaya), https://t.me/passone"
 license: MIT
 compatibility: Hermes Agent >= 0.21 (written against 0.21.5)
@@ -82,7 +82,8 @@ Exit codes: 0 fine · 1 errors · 2 a patch is MISSING · 3 a patch is UNKNOWN �
 4. **Every core edit is a patch note.** Ask the user before touching hermes-agent. Then `new <slug>
    --type patch`, put a unique marker comment in the code, describe the signs in
    `<id>.checks.json` (`contains`, `not_contains`, `upstream`, per version), keep an idempotent
-   re-apply script (`references/patch-scripts.md`). Set `patch_kind`: `bugfix`, `customization`
+   re-apply script (`references/patch-scripts.md`). For a known problem, start from
+   `references/patch-recipes.md`: what breaks, where, the edit, its checks and upstream status. Set `patch_kind`: `bugfix`, `customization`
    or `workaround`; non-bugfixes without an upstream link need `upstream_none_reason`.
 5. **After `hermes update` or an alert:** `doctor`. Walk every non-OK patch with the user (table
    above), then `lint` — `stale` lines are notes verified on another core; re-check them and set
@@ -111,4 +112,5 @@ Exit codes: 0 fine · 1 errors · 2 a patch is MISSING · 3 a patch is UNKNOWN �
 
 More: `references/note-format.md` (fields, statuses, areas), `references/patch-scripts.md`,
 `references/after-update.md` (cron job, update routine), `references/dashboard.md`,
-`references/upstreaming.md`, `references/known-pitfalls.md` (verified Hermes pitfalls).
+`references/upstreaming.md`, `references/known-pitfalls.md` (verified Hermes pitfalls),
+`references/patch-recipes.md` (core patches proven in production, with checks).

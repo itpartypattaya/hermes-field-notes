@@ -37,6 +37,10 @@ This skill gives the agent one place for both, and makes the patch half checkabl
 - **Upstream drafts.** `issue-draft <id>` turns a bugfix note into a masked issue draft. Posting is
   always the human's call.
 
+- **Patch recipes.** [`patch-recipes.md`](skills/hermes-field-notes/references/patch-recipes.md): five core
+  bugfixes and five customizations one production install carries, each with the place in the core, the
+  edit, a ready `checks.json` and the upstream status — a starting point, not a script that patches for you.
+
 The skill never edits the core and never runs patch scripts: it records, verifies and reminds.
 
 ## Install
