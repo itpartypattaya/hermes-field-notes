@@ -36,7 +36,7 @@ import urllib.error  # noqa: E402
 import urllib.request  # noqa: E402
 from pathlib import Path  # noqa: E402
 
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 SCHEMA_VERSION = 1
 SKILL_DIR = Path(__file__).resolve().parents[1]
 ASSETS = SKILL_DIR / "assets"
@@ -238,19 +238,21 @@ class Lock:
     def __enter__(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         deadline = time.monotonic() + self.wait
+        self.token = f"{os.getpid()}:{time.time_ns()}"
         while True:
             try:
                 fd = os.open(str(self.path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                os.write(fd, str(os.getpid()).encode())
+                os.write(fd, self.token.encode())
                 os.close(fd)
                 self.held = True
                 return self
             except FileExistsError:
                 try:
                     age = time.time() - self.path.stat().st_mtime
+                    owner = self.path.read_text(encoding="utf-8", errors="replace")
                 except OSError:
                     continue
-                if age > self.stale:
+                if age > self.stale and not _pid_alive(owner.split(":", 1)[0]):
                     try:
                         self.path.unlink()
                     except OSError:
@@ -263,9 +265,30 @@ class Lock:
     def __exit__(self, *exc):
         if self.held:
             try:
-                self.path.unlink()
+                if self.path.read_text(encoding="utf-8", errors="replace") == self.token:
+                    self.path.unlink()
             except OSError:
                 pass
+
+
+def _pid_alive(pid_text):
+    """True if the process may still run. Unknown (Windows, garbage) counts as alive only when
+    the pid is this process; elsewhere a stale lock older than `stale` is broken."""
+    try:
+        pid = int(pid_text)
+    except ValueError:
+        return False
+    if pid == os.getpid():
+        return True
+    if os.name != "posix":
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
 
 
 def atomic_write(path, text, mode=None):
@@ -355,10 +378,15 @@ def _unquote(token):
 
 def _split_list(inner):
     items, buf, quote = [], [], None
+    escaped = False
     for ch in inner:
         if quote:
             buf.append(ch)
-            if ch == quote:
+            if escaped:
+                escaped = False
+            elif ch == "\\" and quote == '"':
+                escaped = True
+            elif ch == quote:
                 quote = None
             continue
         if ch in "\"'":
@@ -386,11 +414,11 @@ def split_frontmatter(text):
     text = text.lstrip("\ufeff").replace("\r\n", "\n")
     if not text.startswith("---\n"):
         return {}, [], text, ["no frontmatter (file must start with '---')"]
-    end = text.find("\n---", 4)
-    if end == -1:
-        return {}, [], text, ["frontmatter is not closed with '---'"]
-    block = text[4:end]
-    rest = text[end + 4:]
+    m = re.search(r"^---[ \t]*$", text[4:], re.MULTILINE)
+    if not m:
+        return {}, [], text, ["frontmatter is not closed with a '---' line"]
+    block = text[4:4 + m.start()].rstrip("\n")
+    rest = text[4 + m.end():]
     body = rest[1:] if rest.startswith("\n") else rest
     meta, order, errors = {}, [], []
     for n, line in enumerate(block.split("\n"), start=2):
@@ -512,10 +540,12 @@ _VERSION_RE = re.compile(r'^version\s*=\s*"([^"]+)"', re.MULTILINE)
 
 
 def version_tuple(text):
-    m = re.match(r"^\s*v?(\d+)\.(\d+)(?:\.(\d+))?", str(text or ""))
+    """(major, minor, patch, stable): '0.22.0-rc1' < '0.22.0'. None when unreadable."""
+    m = re.match(r"^\s*v?(\d+)\.(\d+)(?:\.(\d+))?(.*)$", str(text or ""))
     if not m:
         return None
-    return tuple(int(x or 0) for x in m.groups())
+    stable = 0 if re.match(r"^[-.+]?(rc|alpha|beta|a|b|dev|pre)", m.group(4).strip(), re.IGNORECASE) else 1
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3) or 0), stable)
 
 
 def _git(root, *argv, timeout=20):
@@ -590,7 +620,7 @@ def _bootstrap_time(home, identity):
     return None
 
 
-def record_core(state, core, now):
+def record_core(state, core, now, root=None):
     """Append the core identity to the history when it changed. Returns the event or None."""
     history = state["core"]["history"]
     if not core.get("identity"):
@@ -604,7 +634,14 @@ def record_core(state, core, now):
     del history[:-50]
     if previous is None:
         return None
-    return {"kind": "core_rollback" if seen_before else "core_changed",
+    kind = "core_changed"
+    old_id = str(previous.get("identity") or "")
+    if core.get("identity_source") == "git" and re.match(r"^[0-9a-f]{40}$", old_id) and root is not None:
+        if _git(root, "merge-base", "--is-ancestor", core["identity"], old_id) is not None:
+            kind = "core_rollback"  # the new revision is older than the previous one
+    elif seen_before:
+        kind = "core_returned"
+    return {"kind": kind,
             "old": previous.get("version"), "old_short": short_identity(previous.get("identity")),
             "new": display_version(core), "new_short": core.get("short")}
 
@@ -678,7 +715,11 @@ def validate_checks(data):
         if not isinstance(targets, list) or not targets:
             problems.append(f"{where}.targets must be a non-empty list")
             targets = []
-        for j, t in enumerate(targets + list(ed.get("upstream") or [])):
+        upstream = ed.get("upstream") or []
+        if not isinstance(upstream, list):
+            problems.append(f"{where}.upstream must be a list")
+            upstream = []
+        for j, t in enumerate(targets + upstream):
             label = f"{where}.targets[{j}]" if j < len(targets) else f"{where}.upstream[{j - len(targets)}]"
             if not isinstance(t, dict) or not isinstance(t.get("file"), str) or not t.get("file"):
                 problems.append(f"{label} needs a 'file'")
@@ -689,8 +730,8 @@ def validate_checks(data):
                 value = t.get(key, [])
                 if not isinstance(value, list) or not all(isinstance(s, str) and s for s in value):
                     problems.append(f"{label}.{key} must be a list of non-empty strings")
-            if j < len(targets) and not t.get("contains"):
-                problems.append(f"{label}.contains must name at least one sign of the patch")
+            if not t.get("contains"):
+                problems.append(f"{label}.contains must name at least one sign")
     return problems
 
 
@@ -780,7 +821,8 @@ def check_patch(note, core, root):
     for rule in upstream_rules:
         path = safe_target(root, rule["file"])
         text = _read(path) if path is not None and path.is_file() else None
-        if text is None or not all(s in text for s in rule.get("contains", [])):
+        if (text is None or not rule.get("contains") or not all(s in text for s in rule["contains"])
+                or any(s in text for s in rule.get("not_contains", []))):
             upstream_ok = False
     if upstream_ok:
         result["evidence"].append("upstream signs present")
@@ -811,6 +853,10 @@ def check_patches(ctx, notes, core):
     for note in notes:
         if note.is_patch and note.is_live:
             results.append(check_patch(note, core, ctx.hermes_root))
+        elif (note.errors or not note.meta) and note.checks_path.is_file():
+            results.append({"id": note.id, "short": note.id, "kind": "?", "status": "UNKNOWN",
+                            "reason": "bad_note", "evidence": note.errors or ["note has no frontmatter"],
+                            "targets": []})
     return results
 
 
@@ -840,7 +886,8 @@ def compute_drift(ctx, core, results):
     if not core.get("is_git"):
         out["reason"] = "core is not a git checkout"
         return out
-    changed = _git(ctx.hermes_root, "diff", "HEAD", "--name-only", "--no-renames")
+    base = core["tag"] if core.get("ahead") and core.get("tag") else "HEAD"  # local commits count too
+    changed = _git(ctx.hermes_root, "diff", base, "--name-only", "--no-renames")
     untracked = _git(ctx.hermes_root, "ls-files", "--others", "--exclude-standard")
     if changed is None or untracked is None:
         out["reason"] = "git failed"
@@ -850,8 +897,8 @@ def compute_drift(ctx, core, results):
     out["changed"] = [p for p in changed.splitlines() if p and not _ignored(p, globs)]
     out["untracked"] = [p for p in untracked.splitlines() if p and not _ignored(p, globs)][:200]
     covered = {t for r in results for t in r.get("targets", [])}
-    out["registered"] = [p for p in out["changed"] if p in covered]
-    out["unregistered"] = [p for p in out["changed"] if p not in covered]
+    out["registered"] = [p for p in out["changed"] + out["untracked"] if p in covered]
+    out["unregistered"] = [p for p in out["changed"] + out["untracked"] if p not in covered]
     return out
 
 
@@ -1097,9 +1144,11 @@ def upstream_info(ctx, state, core, allow_network=True):
         except Exception as exc:  # noqa: BLE001 — network or API shape; keep the last good answer
             cache["error"] = f"{type(exc).__name__}: {str(exc)[:120]}"
             cache["fetched_at"] = iso(now)  # do not hammer the API; retry after check_hours
-            cache.setdefault("identity", core.get("identity"))
         state["upstream"] = cache
-    return {"enabled": True, **(cache.get("info") or {}), "error": cache.get("error"),
+    info = dict(cache.get("info") or {})
+    if cache.get("identity") != core.get("identity"):
+        info.update(relation=None, behind_release=None, behind_main=None)  # measured for another core
+    return {"enabled": True, **info, "error": cache.get("error"),
             "fetched_at": cache.get("fetched_at")}, events
 
 
@@ -1147,7 +1196,9 @@ STRINGS = {
         "a_dash_recreated": "📌 The dashboard message was gone — posted and pinned again",
         "a_pin_failed": "📌 Cannot pin the dashboard: {err}",
         "a_bot_failing": "⚠️ Dashboard update keeps failing: {err}",
-        "a_send_uncertain": "⚠️ Dashboard send got no answer; not retrying for {h} h to avoid a duplicate",
+        "a_send_uncertain": "⚠️ Dashboard send got no answer — check the chat, then run `fieldnotes.py dashboard --publish --force`",
+        "a_core_returned": "↩️ Hermes core is back on a revision seen before: {old} ({old_short}) → {new} ({new_short})",
+        "w_lint": "{n} error(s) in the notes",
         "a_state_recovered": "⚠️ field-notes: {msg}",
         "a_core_missing": "⚠️ field-notes: Hermes core not found at {root} — patches are not checked",
         "a_no_store": "⚠️ field-notes: no notes store at {root} — run scripts/install.py",
@@ -1193,7 +1244,9 @@ STRINGS = {
         "a_dash_recreated": "📌 Сообщение дашборда пропало — отправлено и закреплено заново",
         "a_pin_failed": "📌 Не удалось закрепить дашборд: {err}",
         "a_bot_failing": "⚠️ Дашборд не обновляется: {err}",
-        "a_send_uncertain": "⚠️ Отправка дашборда без ответа; повтор не раньше чем через {h} ч, чтобы не было дубля",
+        "a_send_uncertain": "⚠️ Отправка дашборда осталась без ответа — проверь чат и запусти `fieldnotes.py dashboard --publish --force`",
+        "a_core_returned": "↩️ Ядро Hermes вернулось на ранее виденную ревизию: {old} ({old_short}) → {new} ({new_short})",
+        "w_lint": "ошибок в заметках: {n}",
         "a_state_recovered": "⚠️ field-notes: {msg}",
         "a_core_missing": "⚠️ field-notes: ядро Hermes не найдено в {root} — патчи не проверяются",
         "a_no_store": "⚠️ field-notes: нет хранилища заметок в {root} — запусти scripts/install.py",
@@ -1239,6 +1292,9 @@ def build_report(ctx, state, notes, core, results, drift, lint_items, upstream=N
             reasons.append(("upstream", counts["UPSTREAMED"]))
         if unregistered:
             reasons.append(("drift", unregistered))
+        lint_errors = sum(1 for i in lint_items if i[0] == "error")
+        if lint_errors:
+            reasons.append(("lint", lint_errors))
         verdict = ("attention", reasons) if reasons else ("ok", [])
     return {
         "generated_at": iso(now),
@@ -1362,7 +1418,7 @@ def render(ctx, report, fmt="telegram"):
                                                          w=_plural(up["behind_main"], s["w_commit"]))))
             elif up.get("behind_main") == 0:
                 lines.append(esc(s["main_same"]))
-            if up.get("error") and not latest:
+            if up.get("error"):
                 lines.append(esc(s["up_error"].format(err=up["error"][:60])))
         if report["drift"].get("unregistered"):
             lines.append(esc(s["drift"].format(n=report["drift"]["unregistered"])))
@@ -1507,11 +1563,13 @@ def publish(ctx, state, text, content_hash, api, save, force=False):
             and (entry.get("pinned") or not d.get("pin", True))):
         return events  # nothing changed: zero requests
 
-    uncertain = parse_ts(entry.get("send_uncertain_at"))
-    if not entry.get("message_id") and uncertain and (now - uncertain).total_seconds() < fresh_h * 3600 and not force:
+    if not entry.get("message_id") and entry.get("send_uncertain_at") and not force:
+        # A send without an answer may have reached the chat. Never resend on our own:
+        # one alert, then the owner checks the chat and runs `dashboard --publish --force`.
+        events.append({"kind": "send_uncertain", "throttle": f"uncertain:{key}"})
         return events
 
-    def attempt(method, payload):
+    def attempt(method, payload, retry_5xx=True):
         for i in range(2):
             try:
                 return api.call(method, payload)
@@ -1519,7 +1577,7 @@ def publish(ctx, state, text, content_hash, api, save, force=False):
                 if exc.code == 429 and exc.retry_after and exc.retry_after <= 30 and i == 0:
                     time.sleep(exc.retry_after)
                     continue
-                if (exc.code or 0) >= 500 and i == 0:
+                if (exc.code or 0) >= 500 and i == 0 and retry_5xx:
                     time.sleep(2)
                     continue
                 raise
@@ -1538,12 +1596,12 @@ def publish(ctx, state, text, content_hash, api, save, force=False):
         if thread:
             payload["message_thread_id"] = int(thread)
         try:
-            result = attempt("sendMessage", payload)
+            result = attempt("sendMessage", payload, retry_5xx=False)
         except TelegramError as exc:
-            if exc.uncertain:
+            if exc.uncertain or (exc.code or 0) >= 500:
                 entry["send_uncertain_at"] = iso(now)
                 save()
-                events.append({"kind": "send_uncertain", "h": int(fresh_h), "throttle": f"uncertain:{key}"})
+                events.append({"kind": "send_uncertain", "throttle": f"uncertain:{key}"})
             else:
                 fail(exc)
             return False
@@ -1571,7 +1629,7 @@ def publish(ctx, state, text, content_hash, api, save, force=False):
             if "not modified" in desc:
                 entry.update(content_hash=content_hash, published_at=iso(now), failures=0)
                 save()
-            elif "not found" in desc or "message_id_invalid" in desc or "can't be edited" in desc:
+            elif "not found" in desc or "message_id_invalid" in desc:
                 entry.pop("message_id", None)
                 entry["pinned"] = False
                 save()
@@ -1680,7 +1738,11 @@ MASKS = [
 ]
 
 
+PEM_BLOCK = re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|\Z)", re.DOTALL)
+
+
 def mask(text):
+    text = PEM_BLOCK.sub("<redacted private key>", text)
     for _, pattern in SECRET_PATTERNS:
         text = pattern.sub("<redacted>", text)
     for pattern, repl in MASKS:
@@ -1729,9 +1791,9 @@ _STATUS_MAP = {"fixed locally": "workaround", "workaround": "workaround", "needs
 
 def _map_status(raw):
     raw = str(raw or "").strip().lower()
-    for key, value in _STATUS_MAP.items():
+    for key in sorted(_STATUS_MAP, key=len, reverse=True):
         if raw.startswith(key):
-            return value
+            return _STATUS_MAP[key]
     return "active"
 
 
@@ -1836,9 +1898,18 @@ def _similar(notes, title, limit=3):
     return [n for _, n in sorted(scored, key=lambda x: -x[0])[:limit]]
 
 
+def store_lock(ctx):
+    return Lock(ctx.store / ".fieldnotes.lock")
+
+
 def cmd_new(ctx, args):
     require_store(ctx)
     ctx.require_writable("create a note")
+    with store_lock(ctx):
+        return _cmd_new(ctx, args)
+
+
+def _cmd_new(ctx, args):
     slug = args.slug.strip().lower()
     if not re.match(r"^[a-z0-9][a-z0-9-]{1,60}$", slug):
         raise FieldNotesError("slug: lowercase latin letters, digits and '-', 2–61 characters")
@@ -1869,7 +1940,12 @@ def cmd_new(ctx, args):
     for key, value in values.items():
         text = text.replace("{{" + key + "}}", value)
     path = ctx.notes_dir / f"{note_id}.md"
-    atomic_write(path, text)
+    try:
+        with open(path, "x", encoding="utf-8", newline="\n") as fh:  # never replace an existing note
+            fh.write(text)
+    except FileExistsError:
+        print(f"a note with this name appeared meanwhile: {path}", file=sys.stderr)
+        return EXIT_UNKNOWN
     print(path)
     if args.type == "patch":
         checks = ctx.notes_dir / f"{note_id}.checks.json"
@@ -1882,6 +1958,11 @@ def cmd_new(ctx, args):
 def cmd_index(ctx, args):
     require_store(ctx)
     ctx.require_writable("write INDEX.md")
+    with store_lock(ctx):
+        return _cmd_index(ctx, args)
+
+
+def _cmd_index(ctx, args):
     notes = load_notes(ctx)
     path = ctx.store / "INDEX.md"
     current = path.read_text(encoding="utf-8") if path.is_file() else ""
@@ -1995,7 +2076,7 @@ def cmd_doctor(ctx, args):
         events = []
         if state.get("_recovered"):
             events.append({"kind": "state_recovered", "msg": state["_recovered"]})
-        ev = record_core(state, core, now_utc())
+        ev = record_core(state, core, now_utc(), ctx.hermes_root)
         if ev:
             events.insert(0, ev)
         if core.get("exists"):
@@ -2006,7 +2087,10 @@ def cmd_doctor(ctx, args):
     report = build_report(ctx, state, notes, core, results, drift, items, upstream)
     if args.json:
         out_json({"report": report, "events": events, "patches": results, "lint": items})
-        return patches_exit(results)
+        if not core.get("exists"):
+            return EXIT_NOTFOUND
+        code = patches_exit(results)
+        return EXIT_ERR if code == EXIT_OK and any(i[0] == "error" for i in items) else code
     text, _ = render(ctx, report, "text")
     print(text)
     if events:
@@ -2014,6 +2098,14 @@ def cmd_doctor(ctx, args):
         for line in format_events(ctx, {"alerts": {}}, events):
             print("  " + line)
     code = patches_exit(results)
+    if not core.get("exists"):
+        print(f"\ndoctor: Hermes core not found at {ctx.hermes_root} — nothing was checked (--hermes-root)")
+        return EXIT_NOTFOUND
+    lint_errors = sum(1 for i in items if i[0] == "error")
+    if code == EXIT_OK and lint_errors:
+        print(f"\ndoctor: the patches look fine, but {lint_errors} note error(s) make the registry unreliable "
+              "— run `fieldnotes.py lint`")
+        return EXIT_ERR
     verdict = {EXIT_OK: "all live patches have their signs in place",
                EXIT_MISSING: "a patch is MISSING — re-apply it (with the owner's consent)",
                EXIT_UNKNOWN: "a patch check is UNKNOWN — read its evidence (`patches check`)"}[code]
@@ -2039,7 +2131,7 @@ def cmd_dashboard(ctx, args):
         state = load_state(ctx)
         notes, core, results, drift, items = collect(ctx, state)
         if not ctx.read_only and args.publish:
-            record_core(state, core, now_utc())
+            record_core(state, core, now_utc(), ctx.hermes_root)
         upstream, _ = upstream_info(ctx, state, core)
         report = build_report(ctx, state, notes, core, results, drift, items, upstream)
         fmt = "telegram" if args.publish else args.format
@@ -2060,7 +2152,11 @@ def cmd_dashboard(ctx, args):
 
 
 def cmd_tick(ctx, args):
-    """One cron tick: doctor + dashboard. Prints alert lines only; silence when nothing changed."""
+    """One cron tick: doctor + dashboard. Prints alert lines only; silence when nothing changed.
+
+    Lines are kept in the state as `pending` until they are printed, so a run killed after the
+    baseline moved on (timeout during Telegram calls) repeats them next time instead of losing them."""
+    ctx.require_writable("run a cron tick (it saves state and may publish)")
     lines = []
     with Lock(ctx.lock_path):
         state = load_state(ctx)
@@ -2076,13 +2172,15 @@ def cmd_tick(ctx, args):
             events.append({"kind": "core_missing", "root": str(ctx.hermes_root), "throttle": "core-missing"})
         if state.get("_recovered"):
             events.append({"kind": "state_recovered", "msg": state["_recovered"]})
-        ev = record_core(state, core, now_utc())
+        ev = record_core(state, core, now_utc(), ctx.hermes_root)
         if ev:
             events.insert(0, ev)
         if core.get("exists"):
             events.extend(diff_events(state, core, results, drift, notes))
         upstream, up_events = upstream_info(ctx, state, core)
         events.extend(up_events)
+        state["pending"] = list(state.get("pending") or []) + format_events(ctx, state, events)
+        events = []
         save_state(ctx, state)
         d = ctx.cfg.get("dashboard") or {}
         if d.get("enabled"):
@@ -2096,10 +2194,14 @@ def cmd_tick(ctx, args):
                     events.extend(publish(ctx, state, text, digest, BotApi(token), lambda: save_state(ctx, state)))
                 except FieldNotesError as exc:
                     events.append({"kind": "bot_failing", "err": str(exc), "throttle": "dash-config"})
-        lines = format_events(ctx, state, events)
+        lines = list(state.get("pending") or []) + format_events(ctx, state, events)
+        state["pending"] = lines
         save_state(ctx, state)
-    for line in lines:
-        print(line)
+        for line in lines:
+            print(line)
+        sys.stdout.flush()
+        state["pending"] = []
+        save_state(ctx, state)
     return EXIT_OK
 
 
@@ -2116,6 +2218,14 @@ def cmd_issue(ctx, args):
 
 
 def cmd_migrate(ctx, args):
+    if not (args.apply and not ctx.read_only):
+        return _cmd_migrate(ctx, args)
+    ctx.store.mkdir(parents=True, exist_ok=True)
+    with store_lock(ctx):
+        return _cmd_migrate(ctx, args)
+
+
+def _cmd_migrate(ctx, args):
     src = Path(args.source).expanduser()
     notes_src = src / "notes" if (src / "notes").is_dir() else src
     files = sorted(p for p in notes_src.glob("*.md") if p.name.upper() not in ("INDEX.MD", "README.MD"))
@@ -2129,11 +2239,16 @@ def cmd_migrate(ctx, args):
     for path in files:
         text, problems = migrate_note(path, rows)
         dest = ctx.notes_dir / path.name
-        if dest.resolve() == path.resolve():
+        written = False
+        if any(p.startswith("line ") or "frontmatter" in p for p in problems):
+            state = "SKIPPED: fix the frontmatter first — migrating would drop lines"
+            stats["conflict"] += 1
+        elif dest.resolve() == path.resolve():
             state = "in place"
             if apply and text != path.read_text(encoding="utf-8").replace("\r\n", "\n"):
                 atomic_write(dest, text)
                 state = "rewritten in place"
+                written = True
             stats["new"] += 1
         elif dest.is_file():
             current = dest.read_text(encoding="utf-8").replace("\r\n", "\n")
@@ -2148,10 +2263,11 @@ def cmd_migrate(ctx, args):
             stats["new"] += 1
             if apply:
                 atomic_write(dest, text)
+                written = True
         extra = f" · {'; '.join(problems)}" if problems else ""
         print(f"{path.name}: {state}{extra}")
         for sidecar in path.parent.glob(path.stem + ".checks.json"):
-            if apply and not (ctx.notes_dir / sidecar.name).exists():
+            if written and not (ctx.notes_dir / sidecar.name).exists():
                 atomic_write(ctx.notes_dir / sidecar.name, sidecar.read_text(encoding="utf-8"))
     print(f"-- {len(files)} notes: {stats['new']} to write · {stats['same']} already there · "
           f"{stats['conflict']} conflicts" + ("" if apply else " · dry run, nothing written (add --apply)"))

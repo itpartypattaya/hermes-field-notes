@@ -69,8 +69,8 @@ Every `upstream.check_hours` (default 12) the skill asks the GitHub API, without
 the latest stable release of `upstream.repo` (default `NousResearch/hermes-agent`) and compares the
 installed commit with it and with `upstream.branch` (default `main`): three requests. The answer is
 cached in the state; on errors the last good answer stays and the line says so. A new release
-triggers one alert. `upstream.check: false` keeps the skill fully offline; `--read-only` never calls
-the network.
+triggers one alert. `upstream.check: false` stops the GitHub calls (the dashboard still talks to
+Telegram while it is enabled); `--read-only` never calls the network.
 
 ## Behaviour
 
@@ -79,8 +79,9 @@ the network.
 - Unchanged content → no request at all; the "checked at" line is refreshed every
   `freshness_hours` (default 6).
 - Deleted message → sent and pinned again, with a one-line alert.
-- Rate limits are honoured (`retry_after`); a timeout right after sending marks the send as
-  uncertain and waits `freshness_hours` before trying again (one duplicate is possible, never a
-  stream).
+- Rate limits are honoured (`retry_after`). A send that got no answer (timeout, 5xx) may have
+  reached the chat, so it is never repeated automatically: one alert, then the owner checks the chat
+  and runs `dashboard --publish --force`. A message that can no longer be edited keeps its id and
+  reports the error; only a deleted message is sent again.
 - State lives in `$HERMES_HOME/cache/field-notes-state.json`, keyed by profile, bot, chat and
   thread: moving the dashboard to another chat starts a new message there.

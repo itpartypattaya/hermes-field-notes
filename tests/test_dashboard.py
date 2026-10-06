@@ -300,12 +300,25 @@ class PublishTest(HomeCase):
         events = self.publish(api)
         self.assertEqual([e["kind"] for e in events], ["send_uncertain"])
         api2 = FakeApi()
-        self.at("2026-10-06T11:00:00+00:00")
+        self.at("2026-10-07T17:00:00+00:00")
         self.publish(api2)
-        self.assertEqual(api2.calls, [])                 # no resend within freshness_hours
-        self.at("2026-10-06T17:00:00+00:00")
-        self.publish(api2)
+        self.assertEqual(api2.calls, [])                 # never resent on its own, even much later
+        self.publish(api2, force=True)                   # the owner checked the chat
         self.assertEqual(api2.methods(), ["sendMessage", "pinChatMessage"])
+
+    def test_5xx_on_send_is_uncertain_not_retried(self):
+        api = FakeApi({"sendMessage": [fn.TelegramError("Bad Gateway", 502)]})
+        events = self.publish(api)
+        self.assertEqual(api.methods(), ["sendMessage"])
+        self.assertEqual([e["kind"] for e in events], ["send_uncertain"])
+
+    def test_cannot_edit_keeps_the_message(self):
+        self.publish(FakeApi())
+        api = FakeApi({"editMessageText": [fn.TelegramError("Bad Request: message can't be edited", 400)]})
+        events = self.publish(api, digest="h2")
+        self.assertEqual(api.methods(), ["editMessageText"])
+        self.assertEqual(self.entry()["message_id"], 101)
+        self.assertEqual([e["kind"] for e in events], ["bot_failing"])
 
     def test_rate_limit_waits_and_retries_once(self):
         orig = fn.time.sleep

@@ -39,7 +39,7 @@ This skill gives the agent one place for both, and makes the patch half checkabl
 
 - **Patch recipes.** [`patch-recipes.md`](skills/hermes-field-notes/references/patch-recipes.md): five core
   bugfixes and five customizations one production install carries, each with the place in the core, the
-  edit, a ready `checks.json` and the upstream status — a starting point, not a script that patches for you.
+  edit, what to put into `checks.json` and the upstream status — a starting point, not a script that patches for you.
 
 The skill never edits the core and never runs patch scripts: it records, verifies and reminds.
 
@@ -58,7 +58,8 @@ hermes plugins install itpartypattaya/hermes-field-notes
 hermes plugins enable hermes-field-notes
 ```
 
-Then set up the store and config, and check the result:
+Then set up the store and config, and check the result (after a plugin install the scripts live in
+`~/.hermes/plugins/hermes-field-notes/skills/hermes-field-notes/scripts/` instead):
 
 ```bash
 python3 ~/.hermes/skills/hermes-field-notes/scripts/install.py
@@ -91,7 +92,7 @@ python3 $FN doctor
 python3 $FN dashboard --format md
 ```
 
-`--read-only` on any command guarantees no writes and no network.
+`--read-only` guarantees no writes and no network (the cron entry point `tick` refuses it).
 
 ### Example: `doctor` after an update
 
@@ -137,6 +138,8 @@ false green. Details: [`note-format.md`](skills/hermes-field-notes/references/no
 ## Privacy and safety
 
 - Notes stay on your machine (`$HERMES_HOME/field-notes/` by default); nothing is uploaded.
+- `--read-only` on `doctor`, `patches`, `drift`, `lint`, `dashboard --format` guarantees no writes
+  and no network; `tick` (the cron entry point) refuses it.
 - Network: the Telegram Bot API, only when the dashboard is enabled and only to the chat you set
   (the bot token is read from the environment or `$HERMES_HOME/.env` and never printed); and the
   public GitHub API, without credentials, a few requests every 12 hours to compare your core with

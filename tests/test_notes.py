@@ -240,5 +240,37 @@ class MigrateIssueTest(HomeCase):
         self.assertIn("### Symptom", out)
 
 
+
+class ReviewFixesNotesTest(HomeCase):
+    def test_list_with_escaped_quote_roundtrips(self):
+        meta = {"tags": ['a"b', "c,d"]}
+        back, _, _, errors = fn.split_frontmatter(fn.dump_frontmatter(meta) + "x\n")
+        self.assertEqual(errors, [])
+        self.assertEqual(back["tags"], ['a"b', "c,d"])
+
+    def test_closing_delimiter_is_a_whole_line(self):
+        meta, _, body, errors = fn.split_frontmatter("---\ntitle: x\n---oops\nmore: y\n---\nbody\n")
+        self.assertTrue(errors)                              # '---oops' is not a delimiter
+        self.assertEqual(body, "body\n")
+
+    def test_pem_block_is_masked_whole(self):
+        key = "-----BEGIN RSA PRIVATE KEY-----\nMIIEsecretsecret\n-----END RSA PRIVATE KEY-----"
+        self.assertNotIn("MIIEsecret", fn.mask("a " + key + " b"))
+        self.assertNotIn("MIIEsecret", fn.mask("-----BEGIN PRIVATE KEY-----\nMIIEsecret unterminated"))
+
+    def test_status_fixed_upstream_is_not_a_workaround(self):
+        self.assertEqual(fn._map_status("fixed upstream in 0.21"), "fixed-upstream")
+        self.assertEqual(fn._map_status("fixed locally"), "workaround")
+
+    def test_migrate_skips_damaged_source_and_its_sidecar(self):
+        src = self.tmp / "old"
+        src.mkdir()
+        (src / "2025-05-01-x.md").write_text("---\ntitle: x\n  nested: y\n---\nbody\n", encoding="utf-8")
+        (src / "2025-05-01-x.checks.json").write_text("{}", encoding="utf-8")
+        code, out, _ = self.run_cli("migrate", "--from", str(src), "--apply")
+        self.assertIn("SKIPPED", out)
+        self.assertFalse((self.store / "notes" / "2025-05-01-x.md").exists())
+        self.assertFalse((self.store / "notes" / "2025-05-01-x.checks.json").exists())
+
 if __name__ == "__main__":
     unittest.main()

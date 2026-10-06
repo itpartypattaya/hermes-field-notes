@@ -40,7 +40,7 @@ Hermes с проверкой после каждого `hermes update` и, по 
 
 - **Рецепты патчей.** [`patch-recipes.md`](skills/hermes-field-notes/references/patch-recipes.md) (на английском):
   пять исправлений ядра и пять настроек, которые годами живут на боевой установке, — где в ядре, что
-  править, готовый `checks.json` и статус в апстриме. Отправная точка, а не скрипт, который правит за вас.
+  править, что положить в `checks.json` и статус в апстриме. Отправная точка, а не скрипт, который правит за вас.
 
 Скилл не правит ядро и не запускает патч-скрипты: он записывает, проверяет и напоминает.
 
@@ -59,7 +59,8 @@ hermes plugins install itpartypattaya/hermes-field-notes
 hermes plugins enable hermes-field-notes
 ```
 
-Затем хранилище и конфиг, и проверка:
+Затем хранилище и конфиг, и проверка (после установки плагином скрипты лежат в
+`~/.hermes/plugins/hermes-field-notes/skills/hermes-field-notes/scripts/`):
 
 ```bash
 python3 ~/.hermes/skills/hermes-field-notes/scripts/install.py
@@ -92,7 +93,7 @@ python3 $FN doctor
 python3 $FN dashboard --format md
 ```
 
-`--read-only` у любой команды гарантирует: ни записи, ни сети.
+`--read-only` гарантирует: ни записи, ни сети (`tick`, точка входа cron, его не принимает).
 
 ![The life of one patch: a bugfix lives until the core fixes it; a customization stays local forever](docs/patch-lifecycle.png)
 

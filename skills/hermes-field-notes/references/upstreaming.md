@@ -5,8 +5,9 @@ how it dies a natural death.
 
 1. `python3 "${HERMES_SKILL_DIR}/scripts/fieldnotes.py" issue-draft <id>` prints a draft: title,
    Hermes version and SHA, symptom, root cause, reproduction, workaround — taken from the note.
-2. The draft masks obvious secrets (API keys, bot tokens, private keys), home paths, IP addresses,
-   e-mail addresses and Telegram chat ids. Masking is a safety net, not a review: read every line
+2. The draft masks obvious secrets (API keys, bot tokens, whole private-key blocks), home paths,
+   IPv4 addresses, e-mail addresses and supergroup chat ids (`-100…`). It does not catch IPv6,
+   internal hostnames, positive chat or user ids, or secrets in an unusual format. Masking is a safety net, not a review: read every line
    with the user before anything leaves the machine.
 3. Search the upstream tracker for the symptom first; add to an existing issue rather than opening
    a duplicate.

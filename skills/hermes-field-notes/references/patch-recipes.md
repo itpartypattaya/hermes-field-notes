@@ -11,8 +11,9 @@ How to use a recipe:
 2. Check the upstream issue/PR: if it is merged in your version, you need nothing.
 3. Ask the owner before touching `hermes-agent`. Write the edit as an idempotent script following
    `patch-scripts.md`: exact anchors, fail closed, unique marker, backup, `py_compile`.
-4. `fieldnotes.py new <slug> --type patch`, fill `patch_what`, copy the checks below, adjust the
-   marker to yours, then `patches check` must say `OK`. Restart the gateway.
+4. `fieldnotes.py new <slug> --type patch`, fill `patch_what`, write `<id>.checks.json` from the
+   recipe's **Checks** line (format: `note-format.md`) with your own marker, then `patches check` must
+   say `OK`. Restart the gateway.
 5. Prefer pushing the fix upstream (`upstreaming.md`): a recipe is a stopgap, not a fork.
 
 Anchors move between releases. The recipes name functions and the shape of the change, not line

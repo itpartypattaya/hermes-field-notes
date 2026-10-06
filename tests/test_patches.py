@@ -130,7 +130,7 @@ class DriftTest(HomeCase):
         d = json.loads(out)
         self.assertTrue(d["available"])
         self.assertEqual(d["registered"], ["a.py"])
-        self.assertEqual(sorted(d["unregistered"]), ["b.py", "c.py"])
+        self.assertEqual(sorted(d["unregistered"]), ["b.py", "c.py", "new.py"])   # new files count
         self.assertEqual(d["untracked"], ["new.py"])
 
     def test_local_commits_ahead_of_tag(self):
@@ -176,13 +176,17 @@ class DoctorTest(HomeCase):
         self.make_core(files={"a.py": "1"}, git=True)
         ctx = self.ctx()
         state = fn.load_state(ctx)
-        fn.record_core(state, fn.core_info(ctx), fn.now_utc())
+        root = ctx.hermes_root
+        fn.record_core(state, fn.core_info(ctx), fn.now_utc(), root)
         first = fn.core_info(ctx)["identity"]
         (self.core / "a.py").write_text("2", encoding="utf-8")
         self.git("-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qam", "u")
-        self.assertEqual(fn.record_core(state, fn.core_info(ctx), fn.now_utc())["kind"], "core_changed")
+        second = fn.core_info(ctx)["identity"]
+        self.assertEqual(fn.record_core(state, fn.core_info(ctx), fn.now_utc(), root)["kind"], "core_changed")
         self.git("checkout", "-q", first)
-        self.assertEqual(fn.record_core(state, fn.core_info(ctx), fn.now_utc())["kind"], "core_rollback")
+        self.assertEqual(fn.record_core(state, fn.core_info(ctx), fn.now_utc(), root)["kind"], "core_rollback")
+        self.git("checkout", "-q", second)   # A -> B -> A -> B: the last step goes forward
+        self.assertEqual(fn.record_core(state, fn.core_info(ctx), fn.now_utc(), root)["kind"], "core_changed")
 
     def test_bootstrap_record_is_used(self):
         self.make_core(files={"a.py": "1"}, git=True)
@@ -236,6 +240,72 @@ class DoctorTest(HomeCase):
         self.assertEqual(self.ctx().store, self.tmp / "from-env")
         self.assertEqual(self.ctx(root=str(self.tmp / "from-cli")).store, self.tmp / "from-cli")
 
+
+
+class ReviewFixesTest(HomeCase):
+    """Findings of the code review 07.10.2026."""
+
+    def test_upstream_rule_needs_signs_and_honours_not_contains(self):
+        self.make_core(files={"a.py": "old_code()"})
+        self.assertTrue(any("contains must name" in p for p in fn.validate_checks(
+            {"editions": [{"targets": [{"file": "a.py", "contains": ["M"]}], "upstream": [{"file": "a.py"}]}]})))
+        self.assertTrue(any("upstream must be a list" in p for p in fn.validate_checks(
+            {"editions": [{"targets": [{"file": "a.py", "contains": ["M"]}], "upstream": 42}]})))
+        self.write_patch("2026-01-01-a", "a.py", ["M"],
+                         upstream_rules=[{"file": "a.py", "contains": ["old_code()"], "not_contains": ["old_code()"]}])
+        ctx = self.ctx()
+        r = fn.check_patches(ctx, fn.load_notes(ctx), fn.core_info(ctx))[0]
+        self.assertEqual(r["status"], "MISSING")          # not a false UPSTREAMED
+
+    def test_damaged_patch_note_is_unknown(self):
+        self.make_core(files={"a.py": "M"})
+        path = self.write_patch("2026-01-01-a", "a.py", ["M"])
+        path.write_text("no frontmatter at all", encoding="utf-8")
+        ctx = self.ctx()
+        r = fn.check_patches(ctx, fn.load_notes(ctx), fn.core_info(ctx))
+        self.assertEqual((r[0]["status"], r[0]["reason"]), ("UNKNOWN", "bad_note"))
+
+    def test_doctor_exit_codes_core_missing_and_lint_errors(self):
+        self.write_note("2026-01-01-a")
+        code, out, _ = self.run_cli("doctor", "--read-only")
+        self.assertEqual(code, 4)
+        self.make_core(files={"a.py": "M"})
+        self.write_note("2026-01-02-bad", status="done")
+        code, out, _ = self.run_cli("doctor", "--read-only")
+        self.assertEqual(code, 1)
+        self.assertIn("registry unreliable", out)
+
+    def test_prerelease_is_before_release(self):
+        self.assertLess(fn.version_tuple("0.22.0-rc1"), fn.version_tuple("0.22.0"))
+        editions = [{"when": {"min_version": "0.22.0"}, "targets": [{"file": "a.py", "contains": ["M"]}]}]
+        self.assertEqual(fn._edition_for(editions, "0.22.0rc1"), (None, "n/a"))
+
+    def test_tick_refuses_read_only(self):
+        self.make_core(files={"a.py": "M"})
+        code, _, err = self.run_cli("tick", "--read-only")
+        self.assertEqual(code, 1)
+        self.assertFalse((self.home / "cache").exists())
+
+    def test_pending_alert_survives_an_interrupted_tick(self):
+        self.make_core(files={"a.py": "M"})
+        self.write_patch("2026-01-01-a", "a.py", ["M"], patch_short="Patch A")
+        self.run_cli("tick")
+        (self.core / "a.py").write_text("x", encoding="utf-8")
+        orig = fn.upstream_info
+
+        def crash_after_baseline(ctx, state, core, allow_network=True):
+            raise KeyboardInterrupt  # killed after diff_events moved the baseline
+        ctx = self.ctx()
+        state = fn.load_state(ctx)
+        notes, core, results, drift, _ = fn.collect(ctx)
+        events = fn.diff_events(state, core, results, drift, notes)
+        state["pending"] = fn.format_events(ctx, state, events)
+        fn.save_state(ctx, state)                          # the run dies before printing
+        code, out, _ = self.run_cli("tick")
+        self.assertIn("Patch «Patch A» is lost", out)       # repeated, not lost
+        code, out, _ = self.run_cli("tick")
+        self.assertEqual(out, "")
+        fn.upstream_info = orig
 
 if __name__ == "__main__":
     unittest.main()
