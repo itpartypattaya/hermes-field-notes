@@ -1,6 +1,6 @@
 ---
 name: hermes-field-notes
-description: "Hermes pitfalls and core patches: search, record, verify."
+description: "Record Hermes bugs and pitfalls; check local core patches."
 version: 1.2.0
 author: "Anton Vaskov (itpartypattaya), https://t.me/passone"
 license: MIT
@@ -20,6 +20,9 @@ scripts — it records, verifies and reminds.
 
 ## When to Use
 
+- The user asks to keep a bug, its fix or a lesson, in any language: "let's log this bug",
+  "write the fix down", "remember this pitfall", "save this gotcha", "add it to the bug notes",
+  "field note" — act at once, no need to ask whether to use the notes.
 - A Hermes problem appears (gateway error, cron did not fire, a tool returned nothing, "broke after
   update") — search the notes **before** debugging.
 - A diagnosis took more than a couple of steps, or the cause was not what the symptom suggested —
