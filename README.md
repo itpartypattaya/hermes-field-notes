@@ -163,11 +163,12 @@ python -m unittest discover -s tests
 Standard library only, no network (Telegram is faked). Trigger prompts for the skill:
 `tests/evals/evals.json`.
 
-## Related
+Issues and pull requests are welcome.
 
-- [field-notes](https://github.com/itpartypattaya/field-notes) — the same idea for Claude Code and
-  Codex CLI, without the Hermes-specific parts.
-- [hermes-cron](https://github.com/itpartypattaya/hermes-cron) — operating Hermes cron jobs.
-- [hermes-dreaming](https://github.com/itpartypattaya/hermes-dreaming) — nightly memory consolidation.
+## Author
 
-MIT © Anton Vaskov
+Anton Vaskov — Telegram [@passone](https://t.me/passone), GitHub [itpartypattaya](https://github.com/itpartypattaya).
+
+## License
+
+[MIT](LICENSE)

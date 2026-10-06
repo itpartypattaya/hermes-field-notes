@@ -125,4 +125,12 @@ python -m unittest discover -s tests
 
 Только стандартная библиотека, без сети (Telegram подменён).
 
-MIT © Anton Vaskov
+Вопросы и пулреквесты приветствуются.
+
+## Автор
+
+Антон Васьков — Telegram [@passone](https://t.me/passone), GitHub [itpartypattaya](https://github.com/itpartypattaya).
+
+## Лицензия
+
+[MIT](LICENSE)
