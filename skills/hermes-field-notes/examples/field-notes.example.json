@@ -30,5 +30,8 @@
   "_comment_alerts": "How often the same failure (bot errors, missing store) may be repeated. State changes are always reported once.",
   "alerts": {"repeat_hours": 24},
 
-  "watch": {"timeout_sec": 180}
+  "watch": {"timeout_sec": 180},
+
+  "_comment_upstream": "Where to look for the latest Hermes release and how far main has moved (GitHub API, no credentials, a few requests every check_hours). check=false keeps the skill fully offline.",
+  "upstream": {"check": true, "repo": "NousResearch/hermes-agent", "branch": "main", "check_hours": 12}
 }

@@ -26,20 +26,51 @@ same report as text for any chat.
 
 ## What it shows and why
 
-| Line | Source | Why it matters |
+Written for the owner, not for the engineer: a verdict in words, plain descriptions, a legend.
+
+```
+🩺 Hermes 0.21.5 — all good ✅                      ← the pinned bar shows only this line
+
+⚙️ Hermes core
+Version 0.21.5 · build from main of 29.09.2026
+Installed 30.09.2026 — 7 d ago
+Newer than the latest release 0.21.5 (24.09.2026)
+main has moved on by 3 293 commits since your build
+
+🩹 My patches: 10
+✅ Working — 10:
+• Codex quota is not reported as a login failure #89401
+• …
+
+📒 Notes: 41 · +5 this month · unconfirmed: 1
+
+✅ works · ❌ lost after an update · ⬆️ fixed in Hermes itself · ❔ check undecided
+Checked 07.10 00:31 · refreshed hourly
+```
+
+| Part | Source | Why it matters |
 |---|---|---|
-| First line: version · patches OK / missing / unknown · notes | all below | visible in the pinned bar without opening it |
-| Version, tag, short SHA | `pyproject.toml`, `git describe` | what the agent runs on |
-| Updated (date, days ago), previous version | Hermes' bootstrap record, else first seen by the skill | tie "it broke" to an update |
-| Core changes outside the registry; local commits on top of the tag | `drift` | an unregistered edit disappears on the next update |
-| Patches: bugfixes / customizations / workarounds | `patch_kind` | what can go upstream and what stays for good |
-| In place / missing / unknown | `patches check` | the main signal after an update |
-| Fixed upstream (all time); bugfixes without an issue | note statuses and links | debt you keep paying until it is reported |
-| Core files under patches; oldest patch | checks files, note dates | surface and age of local changes |
-| Patch list (expandable) | per patch: status, age, issue link | problems first |
-| Notes: new in 30 days, to re-verify on this core, unconfirmed | frontmatter | which knowledge may be stale |
-| Areas (top 3); latest note | `area`, `date` | where things break most |
-| Checked at · lint errors / warnings | doctor, lint | how fresh and trustworthy the numbers are |
+| Verdict line: all good / patches lost / needs a look (what exactly) / new release out | everything below | the pinned bar is all most people read |
+| Version; release or build from main, and its date | `pyproject.toml`, git, GitHub releases | what the agent actually runs on |
+| Installed (date, days ago) | Hermes' bootstrap record, else first seen by the skill | tie "it broke" to an update |
+| Latest release: you have it / newer / 🆕 out | GitHub API, `upstream.repo` | whether there is something to update to |
+| How far main has moved since your build | GitHub compare API | how stale a main build is |
+| Core files edited without a patch note | `drift` | those edits vanish on the next update |
+| My patches, grouped: lost, undecided, fixed in Hermes, working | `patches check` + `patch_what` | the main signal after an update, in plain words |
+| Notes: total, new this month, to re-check after the update, unconfirmed | frontmatter | which knowledge may be stale |
+| Legend and "checked at" | — | how to read it and how fresh it is |
+
+The patch list stays open up to 15 working patches; longer lists fold into an expandable quote.
+Lines with nothing to say (no drift, nothing stale) are left out.
+
+## Version check
+
+Every `upstream.check_hours` (default 12) the skill asks the GitHub API, without credentials, for
+the latest stable release of `upstream.repo` (default `NousResearch/hermes-agent`) and compares the
+installed commit with it and with `upstream.branch` (default `main`): three requests. The answer is
+cached in the state; on errors the last good answer stays and the line says so. A new release
+triggers one alert. `upstream.check: false` keeps the skill fully offline; `--read-only` never calls
+the network.
 
 ## Behaviour
 

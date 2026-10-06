@@ -106,7 +106,7 @@ class WatchTest(HomeCase):
         (self.core / "a.py").write_text("gone", encoding="utf-8")
         proc = self.run_watch(env)
         self.assertEqual(proc.returncode, 0)
-        self.assertIn("Patch «Patch A» is missing", proc.stdout)
+        self.assertIn("Patch «Patch A» is lost", proc.stdout)
 
     def test_skill_not_found_and_failure_are_throttled(self):
         proc = self.run_watch({"FIELDNOTES_SCRIPT": ""})

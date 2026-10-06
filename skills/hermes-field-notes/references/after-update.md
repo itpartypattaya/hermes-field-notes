@@ -28,6 +28,7 @@ a silent run. No model is called. The script prints a line only when something c
 - the core identity changed (update) or went back to an earlier one (rollback);
 - a patch became `MISSING`, `UNKNOWN` or `UPSTREAMED` — and again when it is back to `OK`;
 - core files changed outside the patch registry appeared, or disappeared;
+- a new stable Hermes release came out (once per release);
 - the dashboard could not be updated or pinned (at most once per `alerts.repeat_hours`).
 
 Hermes runs cron scripts only from `$HERMES_HOME/scripts/`, so the script is a copy. After

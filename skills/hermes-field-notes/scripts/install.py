@@ -28,7 +28,7 @@ SKILL_DIR = Path(__file__).resolve().parents[1]
 WATCH = "fieldnotes-watch.py"
 EXAMPLE = SKILL_DIR / "examples" / "field-notes.example.json"
 KNOWN_KEYS = {"store_dir", "hermes_root", "patch_scripts_base", "timezone", "language", "drift",
-              "dashboard", "alerts", "watch"}
+              "dashboard", "alerts", "watch", "upstream"}
 
 
 class Report:

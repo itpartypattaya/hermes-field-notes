@@ -1,0 +1,128 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 640">
+  <style>
+    text { font-family: 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace; }
+    .title { fill: #ffffff; font-size: 24px; font-weight: 700; }
+    .subtitle { fill: #94a3b8; font-size: 13px; }
+    .name { fill: #ffffff; font-size: 15px; font-weight: 700; }
+    .sub { fill: #94a3b8; font-size: 12px; }
+    .tiny { fill: #cbd5e1; font-size: 11.5px; }
+    .lane { font-size: 12px; font-weight: 700; letter-spacing: 1px; }
+    .foot { fill: #64748b; font-size: 12px; }
+  </style>
+  <defs>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5"/>
+    </pattern>
+    <marker id="a-slate" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#94a3b8"/></marker>
+    <marker id="a-emerald" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#34d399"/></marker>
+    <marker id="a-rose" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#fb7185"/></marker>
+    <marker id="a-violet" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#a78bfa"/></marker>
+  </defs>
+
+  <rect width="1200" height="640" fill="#0f172a"/>
+  <rect width="1200" height="640" fill="url(#grid)"/>
+
+  <!-- title -->
+  <text x="40" y="48" class="title">the life of one patch</text>
+  <text x="40" y="74" class="subtitle">every status is what doctor sees after a hermes update: a static check of the core on disk</text>
+
+  <!-- lanes -->
+  <rect x="30" y="100" width="1140" height="250" rx="12" fill="none" stroke="#a78bfa" stroke-width="1" stroke-dasharray="8,4"/>
+  <text x="46" y="124" class="lane" fill="#a78bfa">A BUGFIX · LIVES UNTIL THE CORE FIXES IT</text>
+  <rect x="30" y="370" width="1140" height="210" rx="12" fill="none" stroke="#fbbf24" stroke-width="1" stroke-dasharray="8,4"/>
+  <text x="46" y="394" class="lane" fill="#fbbf24">A CUSTOMIZATION · STAYS LOCAL FOREVER</text>
+
+  <!-- ===== lane A arrows ===== -->
+  <circle cx="58" cy="187" r="7" fill="#e2e8f0"/>
+  <line x1="65" y1="187" x2="98" y2="187" stroke="#94a3b8" stroke-width="1.4" marker-end="url(#a-slate)"/>
+  <line x1="290" y1="187" x2="363" y2="187" stroke="#34d399" stroke-width="1.4" marker-end="url(#a-emerald)"/>
+  <text x="327" y="177" class="tiny" text-anchor="middle">checks</text>
+  <!-- OK -> MISSING (down, left side) -->
+  <line x1="400" y1="219" x2="400" y2="270" stroke="#fb7185" stroke-width="1.4" marker-end="url(#a-rose)"/>
+  <text x="390" y="250" class="tiny" text-anchor="end">hermes update</text>
+  <!-- MISSING -> OK (up, right side) -->
+  <line x1="490" y1="272" x2="490" y2="221" stroke="#34d399" stroke-width="1.4" marker-end="url(#a-emerald)"/>
+  <text x="500" y="244" class="tiny">re-applied</text>
+  <text x="500" y="259" class="tiny">(owner's yes)</text>
+  <!-- OK -> UPSTREAMED -->
+  <line x1="535" y1="187" x2="678" y2="187" stroke="#a78bfa" stroke-width="1.4" marker-end="url(#a-violet)"/>
+  <text x="606" y="160" class="tiny" text-anchor="middle">an update that</text>
+  <text x="606" y="175" class="tiny" text-anchor="middle">fixes it upstream</text>
+  <!-- UPSTREAMED -> retired -->
+  <line x1="860" y1="187" x2="908" y2="187" stroke="#a78bfa" stroke-width="1.4" marker-end="url(#a-violet)"/>
+  <!-- retired -> end -->
+  <line x1="1110" y1="187" x2="1133" y2="187" stroke="#94a3b8" stroke-width="1.4" marker-end="url(#a-slate)"/>
+  <circle cx="1146" cy="187" r="10" fill="none" stroke="#e2e8f0" stroke-width="1.5"/>
+  <circle cx="1146" cy="187" r="5.5" fill="#e2e8f0"/>
+
+  <!-- ===== lane A boxes ===== -->
+  <rect x="100" y="155" width="190" height="64" rx="6" fill="#0f172a"/>
+  <rect x="100" y="155" width="190" height="64" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+  <text x="195" y="181" class="name" text-anchor="middle">written</text>
+  <text x="195" y="203" class="sub" text-anchor="middle">marker + checks.json</text>
+
+  <rect x="365" y="155" width="170" height="64" rx="6" fill="#0f172a"/>
+  <rect x="365" y="155" width="170" height="64" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+  <text x="450" y="181" class="name" text-anchor="middle" style="fill:#34d399">OK</text>
+  <text x="450" y="203" class="sub" text-anchor="middle">signs in place</text>
+
+  <rect x="365" y="272" width="170" height="64" rx="6" fill="#0f172a"/>
+  <rect x="365" y="272" width="170" height="64" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.5"/>
+  <text x="450" y="298" class="name" text-anchor="middle" style="fill:#fb7185">MISSING</text>
+  <text x="450" y="320" class="sub" text-anchor="middle">the update wiped it</text>
+  <text x="548" y="310" class="sub">doctor exits 2 · alert if the watch is on</text>
+
+  <rect x="680" y="155" width="180" height="64" rx="6" fill="#0f172a"/>
+  <rect x="680" y="155" width="180" height="64" rx="6" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+  <text x="770" y="181" class="name" text-anchor="middle" style="fill:#a78bfa">UPSTREAMED</text>
+  <text x="770" y="203" class="sub" text-anchor="middle">core has the fix</text>
+
+  <rect x="910" y="155" width="200" height="64" rx="6" fill="#0f172a"/>
+  <rect x="910" y="155" width="200" height="64" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+  <text x="1010" y="181" class="name" text-anchor="middle">retired</text>
+  <text x="1010" y="203" class="sub" text-anchor="middle">fixed-upstream</text>
+  <text x="1010" y="242" class="sub" text-anchor="middle">the owner confirms;</text>
+  <text x="1010" y="258" class="sub" text-anchor="middle">the note stays as history</text>
+
+  <!-- ===== lane B arrows ===== -->
+  <circle cx="58" cy="457" r="7" fill="#e2e8f0"/>
+  <line x1="65" y1="457" x2="98" y2="457" stroke="#94a3b8" stroke-width="1.4" marker-end="url(#a-slate)"/>
+  <line x1="290" y1="457" x2="363" y2="457" stroke="#34d399" stroke-width="1.4" marker-end="url(#a-emerald)"/>
+  <text x="327" y="447" class="tiny" text-anchor="middle">checks</text>
+  <!-- OK -> MISSING -->
+  <line x1="535" y1="449" x2="643" y2="449" stroke="#fb7185" stroke-width="1.4" marker-end="url(#a-rose)"/>
+  <text x="590" y="439" class="tiny" text-anchor="middle">hermes update</text>
+  <!-- MISSING -> OK back, below -->
+  <path d="M 730 489 L 730 530 L 450 530 L 450 491" fill="none" stroke="#34d399" stroke-width="1.4" marker-end="url(#a-emerald)"/>
+  <text x="590" y="550" class="tiny" text-anchor="middle">re-applied (owner's yes) · again after every update</text>
+  <!-- MISSING -> upstream: never -->
+  <line x1="815" y1="457" x2="908" y2="457" stroke="#64748b" stroke-width="1.4" stroke-dasharray="4,4"/>
+  <line x1="853" y1="449" x2="869" y2="465" stroke="#fb7185" stroke-width="2"/>
+  <line x1="869" y1="449" x2="853" y2="465" stroke="#fb7185" stroke-width="2"/>
+
+  <!-- ===== lane B boxes ===== -->
+  <rect x="100" y="425" width="190" height="64" rx="6" fill="#0f172a"/>
+  <rect x="100" y="425" width="190" height="64" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+  <text x="195" y="451" class="name" text-anchor="middle">written</text>
+  <text x="195" y="473" class="sub" text-anchor="middle">marker + checks.json</text>
+
+  <rect x="365" y="425" width="170" height="64" rx="6" fill="#0f172a"/>
+  <rect x="365" y="425" width="170" height="64" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+  <text x="450" y="451" class="name" text-anchor="middle" style="fill:#34d399">OK</text>
+  <text x="450" y="473" class="sub" text-anchor="middle">signs in place</text>
+
+  <rect x="645" y="425" width="170" height="64" rx="6" fill="#0f172a"/>
+  <rect x="645" y="425" width="170" height="64" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.5"/>
+  <text x="730" y="451" class="name" text-anchor="middle" style="fill:#fb7185">MISSING</text>
+  <text x="730" y="473" class="sub" text-anchor="middle">wiped by update</text>
+
+  <rect x="910" y="425" width="235" height="64" rx="6" fill="#0f172a"/>
+  <rect x="910" y="425" width="235" height="64" rx="6" fill="none" stroke="#64748b" stroke-width="1.5" stroke-dasharray="6,4"/>
+  <text x="1027" y="451" class="name" text-anchor="middle" style="fill:#94a3b8">no upstream</text>
+  <text x="1027" y="473" class="sub" text-anchor="middle">upstream_none_reason</text>
+  <text x="1027" y="512" class="sub" text-anchor="middle">a local preference is not</text>
+  <text x="1027" y="528" class="sub" text-anchor="middle">a bug: never retires</text>
+
+  <!-- footer -->
+  <text x="40" y="612" class="foot">re-applying is never automatic: the agent shows the status and waits for the owner's yes</text>
+</svg>

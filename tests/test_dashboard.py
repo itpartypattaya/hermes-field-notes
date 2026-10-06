@@ -40,31 +40,71 @@ class RenderTest(HomeCase):
         super().setUp()
         self.make_core(files={"a.py": "MARK", "b.py": ""}, git=True)
         self.write_patch("2026-01-01-ok", "a.py", ["MARK"], patch_short="Codex <429> & auth",
+                         patch_what="Codex <429> & auth shown right",
                          upstream="https://github.com/NousResearch/hermes-agent/issues/42")
         self.write_patch("2026-01-02-miss", "b.py", ["MARK"], patch_short="Missing one")
         self.write_note("2026-01-03-pit", title="Pitfall title", area="platform")
 
-    def report(self, **cfg):
+    def report(self, upstream=None, **cfg):
         if cfg:
             (self.home / "field-notes.json").write_text(json.dumps(cfg), encoding="utf-8")
         ctx = self.ctx()
         state = fn.load_state(ctx)
         notes, core, results, drift, items = fn.collect(ctx)
         fn.record_core(state, core, fn.now_utc())
-        return ctx, fn.build_report(ctx, state, notes, core, results, drift, items)
+        return ctx, fn.build_report(ctx, state, notes, core, results, drift, items, upstream)
 
-    def test_first_line_counts_and_escaping(self):
+    def test_verdict_line_groups_and_escaping(self):
         ctx, report = self.report()
-        text, digest = fn.render(ctx, report, "telegram")
+        text, _ = fn.render(ctx, report, "telegram")
         first = text.split("\n", 1)[0]
-        self.assertEqual(first, "🩺 Hermes 0.21.5 · 🩹 1 ✅ · 1 ❌ · 🪤 3")
-        self.assertIn("Codex &lt;429&gt; &amp; auth", text)
+        self.assertEqual(first, "🩺 Hermes 0.21.5 — ❌ 1 patch(es) lost — re-apply needed")
+        self.assertIn("❌ Lost after an update — 1, re-apply:", text)
+        self.assertIn("✅ Working — 1:", text)
+        self.assertIn("• Codex &lt;429&gt; &amp; auth shown right", text)     # patch_what wins over patch_short
         self.assertIn('<a href="https://github.com/NousResearch/hermes-agent/issues/42">#42</a>', text)
-        self.assertIn("<blockquote expandable>", text)
         self.assertLess(text.index("Missing one"), text.index("Codex"))     # problems first
+        self.assertIn("✅ works · ❌ lost after an update", text)            # the legend
         self.assertEqual(len(re.findall("<b>", text)), len(re.findall("</b>", text)))
 
-    def test_hash_ignores_freshness_line(self):
+    def test_ok_verdict_and_attention(self):
+        (self.core / "b.py").write_text("MARK", encoding="utf-8")
+        ctx, report = self.report()
+        self.assertTrue(fn.render(ctx, report)[0].startswith("🩺 Hermes 0.21.5 — all good ✅"))
+        (self.core / "new.py").write_text("x", encoding="utf-8")
+        self.git("add", "new.py")
+        ctx, report = self.report()
+        text = fn.render(ctx, report)[0]
+        self.assertIn("needs a look: 1 core edit(s) without a patch note", text.split("\n")[0])
+        self.assertIn("vanish on the next update", text)
+
+    def test_upstream_lines(self):
+        up = {"enabled": True, "relation": "older", "behind_main": 3285,
+              "latest": {"tag": "v2026.10.5", "version": "0.22.0", "date": "2026-10-05"}}
+        ctx, report = self.report(upstream=up)
+        text = fn.render(ctx, report)[0]
+        self.assertIn("🆕 Hermes 0.22.0 is out", text.split("\n")[0])
+        self.assertIn("<b>🆕 New release: 0.22.0 (05.10.2026) — you are on 0.21.5</b>", text)
+        self.assertIn("main has moved on by 3 285 commits", text)
+        up = {"enabled": True, "relation": "newer", "behind_main": 10,
+              "latest": {"tag": "v2026.9.24", "version": "0.21.5", "date": "2026-09-24"}}
+        ctx, report = self.report(upstream=up)
+        text = fn.render(ctx, report)[0]
+        self.assertIn("build from main of", text)
+        self.assertIn("Newer than the latest release 0.21.5 (24.09.2026)", text)
+        up = {"enabled": True, "relation": "same", "behind_main": 0,
+              "latest": {"tag": "v1", "version": "0.21.5", "date": "2026-09-24"}}
+        ctx, report = self.report(upstream=up)
+        text = fn.render(ctx, report)[0]
+        self.assertIn("Latest release: you have it ✅", text)
+        self.assertIn("release of", text)
+
+    def test_russian_plural(self):
+        forms = ("коммит", "коммита", "коммитов")
+        self.assertEqual([fn._plural(n, forms) for n in (1, 3, 5, 11, 21, 22, 112, 3293)],
+                         ["коммит", "коммита", "коммитов", "коммитов", "коммит", "коммита", "коммитов", "коммита"])
+
+    def test_hash_ignores_footer(self):
         ctx, report = self.report()
         _, h1 = fn.render(ctx, report, "telegram")
         report["generated_at"] = "2030-01-01T00:00:00Z"
@@ -74,21 +114,95 @@ class RenderTest(HomeCase):
     def test_russian_and_text_formats(self):
         ctx, report = self.report(language="ru")
         text, _ = fn.render(ctx, report, "telegram")
-        self.assertIn("Патчи — 2", text)
-        self.assertIn("слетел", text)
+        self.assertIn("Мои патчи: 2", text)
+        self.assertIn("Слетели после обновления — 1", text)
+        self.assertIn("работает · ❌ слетел после обновления", text)
         plain, _ = fn.render(ctx, report, "text")
         self.assertNotIn("<b>", plain)
         md, _ = fn.render(ctx, report, "md")
-        self.assertIn("**Ядро**", md)
+        self.assertIn("**⚙️ Ядро Hermes**", md)
 
-    def test_truncation_keeps_markup_valid(self):
+    def test_long_ok_list_folds_and_stays_under_limit(self):
+        ctx, report = self.report()
+        self.assertNotIn("<blockquote", fn.render(ctx, report)[0])     # short lists stay open
         for i in range(200):
             self.write_patch(f"2026-02-{(i % 27) + 1:02d}-p{i}", "a.py", ["MARK"], patch_short="x" * 38 + str(i))
         ctx, report = self.report()
         text, _ = fn.render(ctx, report, "telegram")
-        self.assertLessEqual(len(text), 4000)
+        self.assertLessEqual(len(text), 4096)
         self.assertEqual(text.count("<blockquote expandable>"), text.count("</blockquote>"))
-        self.assertRegex(text, r"\+\d+ more")
+        self.assertIn("<blockquote expandable>", text)
+
+
+class UpstreamTest(HomeCase):
+    def setUp(self):
+        super().setUp()
+        os.environ.pop("FIELDNOTES_OFFLINE")
+        self.make_core(files={"a.py": "x"}, git=True)
+        self.calls = []
+        self._orig = fn.GITHUB_GET
+        self.releases = [{"tag_name": "v2026.9.30", "name": "Hermes Agent v0.22.0-rc (v2026.9.30)",
+                          "prerelease": True, "published_at": "2026-09-30T00:00:00Z"},
+                         {"tag_name": "v2026.9.24", "name": "Hermes Agent v0.21.5 (v2026.9.24)",
+                          "prerelease": False, "published_at": "2026-09-24T10:00:00Z"}]
+
+        def fake(path, timeout=15):
+            self.calls.append(path)
+            if "releases" in path:
+                return self.releases
+            if path.split("compare/")[1].startswith("v"):
+                return {"status": "ahead", "ahead_by": 4853, "behind_by": 0}
+            return {"status": "ahead", "ahead_by": 3285, "behind_by": 0}
+        fn.GITHUB_GET = fake
+
+    def tearDown(self):
+        fn.GITHUB_GET = self._orig
+        super().tearDown()
+
+    def test_fetch_cache_and_new_release_event(self):
+        ctx = self.ctx()
+        state = fn.load_state(ctx)
+        core = fn.core_info(ctx)
+        info, events = fn.upstream_info(ctx, state, core)
+        self.assertEqual(info["latest"]["version"], "0.21.5")         # prerelease skipped
+        self.assertEqual((info["relation"], info["behind_main"]), ("newer", 3285))
+        self.assertEqual(events, [])
+        n = len(self.calls)
+        fn.upstream_info(ctx, state, core)
+        self.assertEqual(len(self.calls), n)                          # cached within check_hours
+        state["upstream"]["fetched_at"] = "2000-01-01T00:00:00Z"
+        self.releases.insert(0, {"tag_name": "v2026.10.6", "name": "Hermes Agent v0.22.0 (v2026.10.6)",
+                                 "prerelease": False, "published_at": "2026-10-06T00:00:00Z"})
+        info, events = fn.upstream_info(ctx, state, core)
+        self.assertEqual([e["kind"] for e in events], ["new_release"])
+        self.assertTrue(fn.format_events(ctx, state, events)[0].startswith("🆕 Hermes 0.22.0 released"))
+
+    def test_error_keeps_last_answer_and_read_only_skips_network(self):
+        ctx = self.ctx()
+        state = fn.load_state(ctx)
+        core = fn.core_info(ctx)
+        fn.upstream_info(ctx, state, core)
+        state["upstream"]["fetched_at"] = "2000-01-01T00:00:00Z"
+
+        def boom(path, timeout=15):
+            raise OSError("no route")
+        fn.GITHUB_GET = boom
+        info, _ = fn.upstream_info(ctx, state, core)
+        self.assertEqual(info["latest"]["version"], "0.21.5")
+        self.assertIn("no route", info["error"])
+        ro = self.ctx(read_only=True)
+        fresh_state = fn.load_state(ro)
+        self.calls.clear()
+        info, _ = fn.upstream_info(ro, fresh_state, core)
+        self.assertEqual(self.calls, [])
+        self.assertIsNone(info.get("latest"))
+
+    def test_check_disabled(self):
+        (self.home / "field-notes.json").write_text('{"upstream": {"check": false}}', encoding="utf-8")
+        ctx = self.ctx()
+        info, _ = fn.upstream_info(ctx, fn.load_state(ctx), fn.core_info(ctx))
+        self.assertEqual(info, {"enabled": False})
+        self.assertEqual(self.calls, [])
 
 
 class PublishTest(HomeCase):
@@ -248,7 +362,7 @@ class TickTest(HomeCase):
         self.assertEqual(out, "")
         (self.core / "a.py").write_text("gone", encoding="utf-8")
         code, out, _ = self.run_cli("tick")
-        self.assertIn("Patch «Patch A» is missing", out)
+        self.assertIn("Patch «Patch A» is lost", out)
         code, out, _ = self.run_cli("tick")
         self.assertEqual(out, "")
 

@@ -1,5 +1,7 @@
 # hermes-field-notes
 
+![hermes-field-notes — pitfalls and core patches for Hermes Agent](docs/banner.png)
+
 **Field notes for a Hermes Agent installation:** pitfalls with their root cause, local patches of
 the Hermes core checked after every `hermes update`, and an optional pinned Telegram dashboard.
 
@@ -16,6 +18,8 @@ Every long-running Hermes install accumulates two kinds of hard-won knowledge th
 This skill gives the agent one place for both, and makes the patch half checkable.
 
 ## What it does
+
+![Notes: search before debugging, record after. Patches: doctor after every update. Watch: an hourly no_agent job and a pinned dashboard](docs/how-it-works.png)
 
 - **Search before debugging.** `fieldnotes.py search <error text>` looks through your notes and a
   bundled list of verified Hermes pitfalls ([`known-pitfalls.md`](skills/hermes-field-notes/references/known-pitfalls.md)).
@@ -108,6 +112,8 @@ doctor: a patch is MISSING — re-apply it (with the owner's consent)
 
 ## How patches are checked
 
+![The life of one patch: a bugfix lives until the core fixes it; a customization stays local forever](docs/patch-lifecycle.png)
+
 A patch note `notes/<id>.md` has a sibling `notes/<id>.checks.json`:
 
 ```json
@@ -127,8 +133,10 @@ false green. Details: [`note-format.md`](skills/hermes-field-notes/references/no
 ## Privacy and safety
 
 - Notes stay on your machine (`$HERMES_HOME/field-notes/` by default); nothing is uploaded.
-- Network: only the Telegram Bot API, only when the dashboard is enabled, only to the chat you set.
-  The bot token is read from the environment or `$HERMES_HOME/.env` and never printed.
+- Network: the Telegram Bot API, only when the dashboard is enabled and only to the chat you set
+  (the bot token is read from the environment or `$HERMES_HOME/.env` and never printed); and the
+  public GitHub API, without credentials, a few requests every 12 hours to compare your core with
+  the latest release (`upstream.check: false` turns it off).
 - Writes: the notes store, `$HERMES_HOME/cache/field-notes-state.json`, the cron script copy in
   `$HERMES_HOME/scripts/`, and the cron job if you run `install_cron.py`. The core is only read.
 

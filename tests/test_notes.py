@@ -72,6 +72,16 @@ class IndexLintTest(HomeCase):
         code, out, _ = self.run_cli("index")
         self.assertIn("up to date", out)
 
+    def test_index_keeps_handwritten_head_without_marker(self):
+        self.write_note("2026-01-01-a")
+        (self.store / "INDEX.md").write_text("# Старый индекс\n\nМой текст.\n\n## Индекс\n\n"
+                                             "| Date | Note | Area |\n|---|---|---|\n| x | y | z |\n", encoding="utf-8")
+        self.run_cli("index")
+        text = (self.store / "INDEX.md").read_text(encoding="utf-8")
+        self.assertTrue(text.startswith("# Старый индекс\n\nМой текст.\n\n## Индекс\n"))
+        self.assertNotIn("| x | y | z |", text)
+        self.assertIn(fn.INDEX_MARKER, text)
+
     def test_index_keeps_user_header(self):
         self.write_note("2026-01-01-a")
         self.run_cli("index")

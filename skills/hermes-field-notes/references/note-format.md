@@ -19,7 +19,8 @@ lists (`[a, b]`). No nesting. Quote any value with `:`, `#` or leading digits: `
 | `verified_identity` / `verified_at` | no | short git SHA (or identity) of the core where it was last re-checked, and when |
 | `tags`, `upstream`, `candidate_skill` | no | words for search; issue/PR URL; skill name if it may become one |
 | `patch_kind` | patch | `bugfix`, `customization`, `workaround` |
-| `patch_short` | patch | label for lists and the dashboard, ~40 characters |
+| `patch_short` | patch | short label for lists and alerts, ~40 characters |
+| `patch_what` | no | what the patch does, in plain words for the owner; the dashboard shows it instead of `patch_short` |
 | `patch_script` | no | re-apply script; printed in alerts, never run by the skill |
 | `upstream_none_reason` | no | why a non-bugfix patch has no upstream link |
 

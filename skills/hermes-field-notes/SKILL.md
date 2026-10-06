@@ -1,7 +1,7 @@
 ---
 name: hermes-field-notes
 description: "Hermes pitfalls and core patches: search, record, verify."
-version: 1.0.0
+version: 1.1.0
 author: "Anton Vaskov (itpartypattaya), https://t.me/passone"
 license: MIT
 compatibility: Hermes Agent >= 0.21 (written against 0.21.5)

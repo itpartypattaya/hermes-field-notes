@@ -17,7 +17,8 @@ from pathlib import Path
 sys.dont_write_bytecode = True
 
 REPO = Path(__file__).resolve().parents[1]
-SKILL = REPO / "skills" / "hermes-field-notes"
+# Public repo: <repo>/skills/hermes-field-notes; an agent's own copy keeps tests inside the skill folder.
+SKILL = REPO if (REPO / "SKILL.md").is_file() else REPO / "skills" / "hermes-field-notes"
 SCRIPTS = SKILL / "scripts"
 
 
@@ -32,7 +33,8 @@ fn = load("fieldnotes", "fieldnotes.py")
 
 ENV_KEYS = ("HERMES_HOME", "FIELDNOTES_STORE_DIR", "FIELD_NOTES_DIR", "FIELDNOTES_CONFIG", "FIELDNOTES_HERMES_ROOT",
             "FIELDNOTES_TIMEZONE", "FIELDNOTES_LANGUAGE", "FIELDNOTES_NOW", "TELEGRAM_BOT_TOKEN",
-            "TELEGRAM_HOME_CHANNEL", "TELEGRAM_HOME_CHANNEL_THREAD_ID", "FIELDNOTES_SCRIPT")
+            "TELEGRAM_HOME_CHANNEL", "TELEGRAM_HOME_CHANNEL_THREAD_ID", "FIELDNOTES_SCRIPT",
+            "FIELDNOTES_OFFLINE")
 
 PYPROJECT = '[project]\nname = "hermes-agent"\nversion = "{v}"\n'
 
@@ -56,6 +58,7 @@ class HomeCase(unittest.TestCase):
         self.home = self.tmp / "hermes"
         self.home.mkdir()
         os.environ["HERMES_HOME"] = str(self.home)
+        os.environ["FIELDNOTES_OFFLINE"] = "1"  # no GitHub calls unless a test opts in with a fake
         self.store = self.home / "field-notes"
         (self.store / "notes").mkdir(parents=True)
         self.core = self.home / "hermes-agent"

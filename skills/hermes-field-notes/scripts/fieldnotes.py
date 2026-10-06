@@ -36,7 +36,7 @@ import urllib.error  # noqa: E402
 import urllib.request  # noqa: E402
 from pathlib import Path  # noqa: E402
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 SCHEMA_VERSION = 1
 SKILL_DIR = Path(__file__).resolve().parents[1]
 ASSETS = SKILL_DIR / "assets"
@@ -66,6 +66,7 @@ DEFAULTS = {
                   "bot_token_env": "TELEGRAM_BOT_TOKEN", "freshness_hours": 6, "max_patches": 40},
     "alerts": {"repeat_hours": 24},
     "watch": {"timeout_sec": 180},
+    "upstream": {"check": True, "repo": "NousResearch/hermes-agent", "branch": "main", "check_hours": 12},
 }
 
 SECRET_PATTERNS = [
@@ -319,7 +320,8 @@ def save_state(ctx, state):
 
 _KEY_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_-]*)\s*:(?:\s+(.*))?$")
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-_BARE_OK = re.compile(r"^[A-Za-z][A-Za-z0-9_.\-/]*$")
+_BARE_OK = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-/]*$")
+_NUMBER_LIKE = re.compile(r"^[-+]?(\d[\d_]*\.?\d*|\.\d+)([eE][-+]?\d+)?$|^0[xXoObB]")
 _YAML_WORDS = {"yes", "no", "on", "off", "true", "false", "null", "y", "n", "~"}
 
 
@@ -418,7 +420,8 @@ def format_scalar(value):
     text = "" if value is None else str(value)
     if _DATE_RE.match(text):
         return text
-    if _BARE_OK.match(text) and text.lower() not in _YAML_WORDS:
+    if (_BARE_OK.match(text) and re.search(r"[A-Za-z]", text) and text.lower() not in _YAML_WORDS
+            and not _NUMBER_LIKE.match(text)):
         return text
     return json.dumps(text, ensure_ascii=False)
 
@@ -544,6 +547,8 @@ def core_info(ctx):
     head = _git(root, "rev-parse", "HEAD")
     if head and re.match(r"^[0-9a-f]{40}$", head.strip()):
         info.update(is_git=True, identity=head.strip(), identity_source="git", short=head.strip()[:7])
+        when = _git(root, "log", "-1", "--format=%cI", "HEAD")
+        info["commit_date"] = when.strip()[:10] if when else None
         desc = _git(root, "describe", "--tags", "--long")
         if desc:
             desc = desc.strip()
@@ -892,8 +897,8 @@ def lint(ctx, notes, core=None):
                 out.append(("warn", where, f"{key} is still the template placeholder"))
         if "{{" in note.text:
             out.append(("warn", where, "template placeholders '{{…}}' left in the note"))
-        if len(str(m.get("summary") or "")) > 400:
-            out.append(("warn", where, "summary is longer than 400 characters"))
+        if len(str(m.get("summary") or "")) > 1000:
+            out.append(("warn", where, "summary is longer than 1000 characters — it is one line of the index"))
         if note.is_patch and note.is_live:
             if m.get("patch_kind") in ("customization", "workaround") and not m.get("upstream") \
                     and not m.get("upstream_none_reason"):
@@ -948,8 +953,22 @@ def _cell(text):
     return str(text or "").replace("|", "\\|").replace("\n", " ").strip()
 
 
+def _index_head(current):
+    """Text above the generated table: everything above the marker; for an index written by hand
+    before this skill, everything above its first table header row; else the default intro."""
+    current = current.replace("\r\n", "\n")
+    if INDEX_MARKER in current:
+        return current.split(INDEX_MARKER)[0]
+    lines = current.split("\n")
+    for i, line in enumerate(lines):
+        if re.match(r"^\|\s*(date|дата)\s*\|", line, re.IGNORECASE):
+            head = "\n".join(lines[:i]).rstrip()
+            return head + "\n" if head else INDEX_HEAD
+    return INDEX_HEAD
+
+
 def render_index(notes, current=""):
-    head = current.replace("\r\n", "\n").split(INDEX_MARKER)[0] if INDEX_MARKER in current else INDEX_HEAD
+    head = _index_head(current)
     rows = []
     for note in sorted(notes, key=lambda n: (str(n.get("date") or ""), n.id), reverse=True):
         date = str(note.get("date") or "?")
@@ -1005,35 +1024,124 @@ def search(notes, terms, limit=10):
 
 
 # ---------------------------------------------------------------------------
+# upstream: latest Hermes release and how far the installed core is from it
+# ---------------------------------------------------------------------------
+
+def _github_get(path, timeout=15):
+    """GET https://api.github.com/<path> without credentials (60 requests/hour per IP is plenty)."""
+    req = urllib.request.Request(f"https://api.github.com/{path}",
+                                 headers={"Accept": "application/vnd.github+json",
+                                          "User-Agent": "hermes-field-notes"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+GITHUB_GET = _github_get  # replaced in tests
+
+
+def _release_version(release):
+    for text in (release.get("name") or "", release.get("tag_name") or ""):
+        m = re.search(r"v?(\d+\.\d+\.\d+)", text)
+        if m and not re.match(r"^\d{4}\.", m.group(1)):
+            return m.group(1)
+    return release.get("tag_name")
+
+
+def fetch_upstream(ctx, core):
+    """Latest stable release, how the core relates to it, and how far main has moved on."""
+    up = ctx.cfg.get("upstream") or {}
+    repo = str(up.get("repo") or "NousResearch/hermes-agent")
+    branch = str(up.get("branch") or "main")
+    releases = GITHUB_GET(f"repos/{repo}/releases?per_page=10")
+    latest = next((r for r in releases if not r.get("draft") and not r.get("prerelease")), None)
+    info = {"latest": None, "relation": None, "behind_release": None, "behind_main": None}
+    if latest:
+        info["latest"] = {"tag": latest.get("tag_name"), "version": _release_version(latest),
+                          "date": str(latest.get("published_at") or "")[:10]}
+    sha = core.get("identity") if core.get("identity_source") == "git" else None
+    if sha and latest:
+        cmp = GITHUB_GET(f"repos/{repo}/compare/{latest['tag_name']}...{sha}")
+        status = cmp.get("status")
+        info["relation"] = {"identical": "same", "ahead": "newer", "behind": "older",
+                            "diverged": "diverged"}.get(status)
+        info["behind_release"] = cmp.get("behind_by")
+    elif latest and version_tuple(core.get("version")) and version_tuple(info["latest"]["version"]):
+        mine, theirs = version_tuple(core["version"]), version_tuple(info["latest"]["version"])
+        info["relation"] = "same" if mine == theirs else ("newer" if mine > theirs else "older")
+    if sha:
+        cmp = GITHUB_GET(f"repos/{repo}/compare/{sha}...{branch}")
+        info["behind_main"] = cmp.get("ahead_by")
+    return info
+
+
+def upstream_info(ctx, state, core, allow_network=True):
+    """Cached upstream info (refreshed every upstream.check_hours) and alert events."""
+    up = ctx.cfg.get("upstream") or {}
+    if not up.get("check", True) or os.environ.get("FIELDNOTES_OFFLINE"):
+        return {"enabled": False}, []
+    cache = dict(state.get("upstream") or {})
+    now = now_utc()
+    hours = float(up.get("check_hours") or 12)
+    fetched = parse_ts(cache.get("fetched_at"))
+    fresh = fetched and (now - fetched).total_seconds() < hours * 3600 \
+        and cache.get("identity") == core.get("identity")
+    events = []
+    if not fresh and allow_network and not ctx.read_only:
+        previous_tag = ((cache.get("info") or {}).get("latest") or {}).get("tag")
+        try:
+            info = fetch_upstream(ctx, core)
+            cache = {"fetched_at": iso(now), "identity": core.get("identity"), "info": info, "error": None}
+            new_tag = (info.get("latest") or {}).get("tag")
+            if previous_tag and new_tag and new_tag != previous_tag:
+                events.append({"kind": "new_release", "v": info["latest"]["version"], "date": info["latest"]["date"]})
+        except Exception as exc:  # noqa: BLE001 — network or API shape; keep the last good answer
+            cache["error"] = f"{type(exc).__name__}: {str(exc)[:120]}"
+            cache["fetched_at"] = iso(now)  # do not hammer the API; retry after check_hours
+            cache.setdefault("identity", core.get("identity"))
+        state["upstream"] = cache
+    return {"enabled": True, **(cache.get("info") or {}), "error": cache.get("error"),
+            "fetched_at": cache.get("fetched_at")}, events
+
+
+# ---------------------------------------------------------------------------
 # dashboard: strings, report, render
 # ---------------------------------------------------------------------------
 
 STRINGS = {
     "en": {
-        "core": "Core", "updated": "Updated {when} ({ago})", "updated_first": "First seen {when} ({ago})",
-        "ago_days": "{n} d ago", "ago_today": "today", "was": "was {v} ({s})", "rollback": "rolled back",
-        "drift_none": "Core changes outside the registry: none ✅",
-        "drift_some": "⚠️ Core changes outside the registry: {n} ({files})",
-        "drift_na": "Core changes: not checked ({reason})",
-        "drift_reg": "Changed core files with known patches: {n}",
-        "ahead": "Local commits on top of {tag}: {n}",
-        "patches": "Patches — {n}", "kinds": "bugfixes {b} · customizations {c} · workarounds {w}",
-        "status_line": "✅ {ok} signs in place · ❌ {missing} missing · ❔ {unknown} unknown",
-        "status_extra": "⬆️ fixed upstream (all time): {up} · bugfixes without an issue: {noissue}",
-        "files": "Core files under patches: {files} · oldest patch: {age} d",
-        "no_patches": "No patches registered.",
-        "notes": "Notes — {n}", "notes_line": "+{new} in 30 d · re-verify on this core: {stale} · unconfirmed: {unc}",
-        "areas": "Areas: {list}", "last": "Latest: {date} «{title}»",
-        "checked": "Checked {when} · lint: {err} ✖ · {warn} ⚠️",
-        "more": "+{n} more", "days": "{n} d", "tz_note": " (UTC)",
-        "st_OK": "in place", "st_MISSING": "missing", "st_UNKNOWN": "unknown", "st_UPSTREAMED": "fixed upstream?",
-        "st_N/A": "not for this version",
+        "v_ok": "all good ✅", "v_missing": "❌ {n} patch(es) lost — re-apply needed",
+        "v_attention": "⚠️ needs a look: {what}", "v_new": "🆕 Hermes {v} is out",
+        "w_unknown": "{n} patch check(s) undecided", "w_upstream": "{n} patch(es) already fixed in Hermes",
+        "w_drift": "{n} core edit(s) without a patch note", "w_core": "core not found",
+        "core": "⚙️ Hermes core", "version_release": "Version {v} · release of {d}",
+        "version_main": "Version {v} · build from main of {d}", "version_plain": "Version {v}",
+        "installed": "Installed {d} — {ago}", "seen_since": "Tracked since {d}",
+        "rel_same": "Latest release: you have it ✅", "rel_newer": "Newer than the latest release {v} ({d})",
+        "rel_older": "🆕 New release: {v} ({d}) — you are on {mine}",
+        "rel_diverged": "Branch differs from release {v} ({d})",
+        "main_behind": "main has moved on by {n} {w} since your build", "w_commit": ("commit", "commits", "commits"),
+        "main_same": "Same commit as current main",
+        "up_error": "Could not check for updates ({err})",
+        "drift": "⚠️ {n} core file(s) edited without a patch note — those edits vanish on the next update",
+        "local_commits": "⚠️ {n} local commit(s) on top of the installed version",
+        "patches": "🩹 My patches: {n}", "no_patches": "🩹 No patches — the core is unmodified",
+        "g_MISSING": "❌ Lost after an update — {n}, re-apply:", "g_UNKNOWN": "❔ Could not check — {n}:",
+        "g_UPSTREAMED": "⬆️ Already fixed in Hermes — {n}, can be retired:", "g_OK": "✅ Working — {n}:",
+        "g_N/A": "⏸ Not needed on this version — {n}:",
+        "r_partial": "only part of the edit is there", "r_conflict": "both the patch and Hermes' own fix are there",
+        "r_target_gone": "the file is gone from the core", "r_version_unknown": "core version unclear",
+        "r_bad_checks": "its check description is broken", "r_unreadable": "file cannot be read",
+        "notes": "📒 Notes: {n}", "n_new": "+{n} this month", "n_stale": "re-check after the update: {n}",
+        "n_unc": "unconfirmed: {n}",
+        "legend": "✅ works · ❌ lost after an update · ⬆️ fixed in Hermes itself · ❔ check undecided",
+        "footer": "Checked {when} · refreshed hourly", "footer_lint": " · ⚠️ errors in notes: {n} (fieldnotes lint)",
+        "ago_days": "{n} d ago", "ago_today": "today", "ago_1": "yesterday", "tz_note": " (UTC)",
         "a_core_changed": "🔄 Hermes core updated: {old} ({old_short}) → {new} ({new_short})",
         "a_core_rollback": "↩️ Hermes core rolled back: {old} ({old_short}) → {new} ({new_short})",
-        "a_patch_MISSING": "❌ Patch «{p}» is missing — re-apply it: {cmd}",
+        "a_patch_MISSING": "❌ Patch «{p}» is lost — re-apply it: {cmd}",
         "a_patch_UNKNOWN": "❔ Patch «{p}»: check undecided ({reason})",
-        "a_patch_UPSTREAMED": "⬆️ Patch «{p}» looks fixed upstream — confirm and mark it fixed-upstream",
-        "a_patch_back": "✅ Patch «{p}» is in place again",
+        "a_patch_UPSTREAMED": "⬆️ Patch «{p}» looks fixed in Hermes — confirm and mark it fixed-upstream",
+        "a_patch_back": "✅ Patch «{p}» works again",
         "a_drift_new": "⚠️ Core files changed outside the patch registry: {files}",
         "a_drift_clear": "✅ No core changes outside the registry any more",
         "a_dash_recreated": "📌 The dashboard message was gone — posted and pinned again",
@@ -1043,33 +1151,43 @@ STRINGS = {
         "a_state_recovered": "⚠️ field-notes: {msg}",
         "a_core_missing": "⚠️ field-notes: Hermes core not found at {root} — patches are not checked",
         "a_no_store": "⚠️ field-notes: no notes store at {root} — run scripts/install.py",
+        "a_new_release": "🆕 Hermes {v} released ({date}) — read the notes, then update and run doctor",
         "cmd_none": "see the note",
     },
     "ru": {
-        "core": "Ядро", "updated": "Обновлено {when} ({ago})", "updated_first": "Впервые замечено {when} ({ago})",
-        "ago_days": "{n} дн назад", "ago_today": "сегодня", "was": "было {v} ({s})", "rollback": "откат",
-        "drift_none": "Изменения ядра вне реестра: нет ✅",
-        "drift_some": "⚠️ Изменения ядра вне реестра: {n} ({files})",
-        "drift_na": "Изменения ядра: не проверено ({reason})",
-        "drift_reg": "Изменённых файлов с известными патчами: {n}",
-        "ahead": "Локальных коммитов поверх {tag}: {n}",
-        "patches": "Патчи — {n}", "kinds": "багфиксы {b} · настройки {c} · обходы {w}",
-        "status_line": "✅ {ok} признаки на месте · ❌ {missing} слетели · ❔ {unknown} неизвестно",
-        "status_extra": "⬆️ приняты апстримом (всего): {up} · багфиксов без issue: {noissue}",
-        "files": "Файлов ядра под патчами: {files} · старейший патч: {age} дн",
-        "no_patches": "Патчей нет.",
-        "notes": "Заметки — {n}", "notes_line": "+{new} за 30 дн · перепроверить на этом ядре: {stale} · не подтверждено: {unc}",
-        "areas": "Области: {list}", "last": "Последняя: {date} «{title}»",
-        "checked": "Проверено {when} · lint: {err} ✖ · {warn} ⚠️",
-        "more": "+{n} ещё", "days": "{n} дн", "tz_note": " (UTC)",
-        "st_OK": "на месте", "st_MISSING": "слетел", "st_UNKNOWN": "неизвестно", "st_UPSTREAMED": "в апстриме?",
-        "st_N/A": "не для этой версии",
+        "v_ok": "всё в порядке ✅", "v_missing": "❌ слетело патчей: {n} — нужно переприменить",
+        "v_attention": "⚠️ нужно посмотреть: {what}", "v_new": "🆕 вышел Hermes {v}",
+        "w_unknown": "не проверено патчей: {n}", "w_upstream": "уже исправлено в Hermes: {n}",
+        "w_drift": "правок ядра без описания: {n}", "w_core": "ядро не найдено",
+        "core": "⚙️ Ядро Hermes", "version_release": "Версия {v} · релиз от {d}",
+        "version_main": "Версия {v} · сборка из main от {d}", "version_plain": "Версия {v}",
+        "installed": "Установлена {d} — {ago}", "seen_since": "Отслеживается с {d}",
+        "rel_same": "Последний релиз: он и стоит ✅", "rel_newer": "Новее последнего релиза {v} (от {d})",
+        "rel_older": "🆕 Вышел релиз {v} (от {d}) — у тебя {mine}",
+        "rel_diverged": "Ветка расходится с релизом {v} (от {d})",
+        "main_behind": "Свежий main ушёл вперёд на {n} {w}", "w_commit": ("коммит", "коммита", "коммитов"),
+        "main_same": "Совпадает с текущим main",
+        "up_error": "Проверить обновления не удалось ({err})",
+        "drift": "⚠️ Файлов ядра изменено без описания патча: {n} — эти правки пропадут при обновлении",
+        "local_commits": "⚠️ Локальных коммитов поверх установленной версии: {n}",
+        "patches": "🩹 Мои патчи: {n}", "no_patches": "🩹 Своих патчей нет — ядро без правок",
+        "g_MISSING": "❌ Слетели после обновления — {n}, переприменить:", "g_UNKNOWN": "❔ Не удалось проверить — {n}:",
+        "g_UPSTREAMED": "⬆️ Уже исправлено в самом Hermes — {n}, можно снять:", "g_OK": "✅ Работают — {n}:",
+        "g_N/A": "⏸ Не нужны на этой версии — {n}:",
+        "r_partial": "правка на месте лишь частично", "r_conflict": "есть и патч, и исправление Hermes",
+        "r_target_gone": "файл исчез из ядра", "r_version_unknown": "не ясна версия ядра",
+        "r_bad_checks": "ошибка в описании проверки", "r_unreadable": "файл не читается",
+        "notes": "📒 Заметки: {n}", "n_new": "+{n} за месяц", "n_stale": "перепроверить после обновления: {n}",
+        "n_unc": "не подтверждено: {n}",
+        "legend": "✅ работает · ❌ слетел после обновления · ⬆️ исправлено в самом Hermes · ❔ проверка не уверена",
+        "footer": "Проверено {when} · обновляется каждый час", "footer_lint": " · ⚠️ ошибок в заметках: {n} (fieldnotes lint)",
+        "ago_days": "{n} дн назад", "ago_today": "сегодня", "ago_1": "вчера", "tz_note": " (UTC)",
         "a_core_changed": "🔄 Ядро Hermes обновлено: {old} ({old_short}) → {new} ({new_short})",
         "a_core_rollback": "↩️ Ядро Hermes откатилось: {old} ({old_short}) → {new} ({new_short})",
         "a_patch_MISSING": "❌ Патч «{p}» слетел — переприменить: {cmd}",
         "a_patch_UNKNOWN": "❔ Патч «{p}»: проверка не решила ({reason})",
-        "a_patch_UPSTREAMED": "⬆️ Патч «{p}», похоже, принят апстримом — подтвердить и пометить fixed-upstream",
-        "a_patch_back": "✅ Патч «{p}» снова на месте",
+        "a_patch_UPSTREAMED": "⬆️ Патч «{p}», похоже, исправлен в самом Hermes — подтвердить и пометить fixed-upstream",
+        "a_patch_back": "✅ Патч «{p}» снова работает",
         "a_drift_new": "⚠️ Файлы ядра изменены мимо реестра патчей: {files}",
         "a_drift_clear": "✅ Изменений ядра вне реестра больше нет",
         "a_dash_recreated": "📌 Сообщение дашборда пропало — отправлено и закреплено заново",
@@ -1079,6 +1197,7 @@ STRINGS = {
         "a_state_recovered": "⚠️ field-notes: {msg}",
         "a_core_missing": "⚠️ field-notes: ядро Hermes не найдено в {root} — патчи не проверяются",
         "a_no_store": "⚠️ field-notes: нет хранилища заметок в {root} — запусти scripts/install.py",
+        "a_new_release": "🆕 Вышел Hermes {v} ({date}) — прочитать список изменений, обновиться и запустить doctor",
         "cmd_none": "см. заметку",
     },
 }
@@ -1087,52 +1206,53 @@ STATUS_ICON = {"OK": "✅", "MISSING": "❌", "UNKNOWN": "❔", "UPSTREAMED": "�
 STATUS_ORDER = {"MISSING": 0, "UNKNOWN": 1, "UPSTREAMED": 2, "OK": 3, "N/A": 4}
 
 
-def build_report(ctx, state, notes, core, results, drift, lint_items):
+def build_report(ctx, state, notes, core, results, drift, lint_items, upstream=None):
     now = now_utc()
     today = ctx.today()
     live = [n for n in notes if n.is_live]
     patch_notes = {n.id: n for n in notes if n.is_patch}
-    counts = {k: sum(1 for r in results if r["status"] == k) for k in STATUS_ICON}
-    kinds = {k: sum(1 for r in results if r["kind"] == k) for k in PATCH_KINDS}
-    ages = []
-    patch_rows = []
+    rows = []
     for r in results:
         note = patch_notes.get(r["id"])
-        d = note.date() if note else None
-        age = (today - d).days if d else None
-        if age is not None:
-            ages.append(age)
-        patch_rows.append({**r, "age": age, "upstream": str(note.get("upstream") or "") if note else ""})
-    patch_rows.sort(key=lambda r: (STATUS_ORDER.get(r["status"], 9), -(r["age"] or 0)))
+        rows.append({"id": r["id"], "status": r["status"], "reason": r.get("reason"),
+                     "label": str((note.get("patch_what") if note else "") or r["short"]),
+                     "upstream": str(note.get("upstream") or "") if note else ""})
+    rows.sort(key=lambda r: (STATUS_ORDER.get(r["status"], 9), r["label"].lower()))
+    counts = {k: sum(1 for r in rows if r["status"] == k) for k in STATUS_ICON}
     stale = 0
     if core.get("identity"):
         for n in live:
             vid = str(n.get("verified_identity") or "")
             if vid and not core["identity"].startswith(vid) and not str(core.get("short") or "").startswith(vid):
                 stale += 1
-    areas = {}
-    for n in live:
-        areas[str(n.get("area") or "other")] = areas.get(str(n.get("area") or "other"), 0) + 1
-    latest = max(notes, key=lambda n: (str(n.get("date") or ""), n.id)) if notes else None
     upd, upd_src = updated_at(state, core)
-    prev = previous_core(state, core)
+    unregistered = len(drift.get("unregistered") or []) if drift.get("available") else 0
+    if not core.get("exists"):
+        verdict = ("attention", ["core"])
+    elif counts["MISSING"]:
+        verdict = ("missing", [])
+    else:
+        reasons = []
+        if counts["UNKNOWN"]:
+            reasons.append(("unknown", counts["UNKNOWN"]))
+        if counts["UPSTREAMED"]:
+            reasons.append(("upstream", counts["UPSTREAMED"]))
+        if unregistered:
+            reasons.append(("drift", unregistered))
+        verdict = ("attention", reasons) if reasons else ("ok", [])
     return {
         "generated_at": iso(now),
-        "core": {"version": display_version(core), "tag": core.get("tag"), "short": core.get("short"),
-                 "updated_at": iso(upd) if upd else None, "updated_source": upd_src,
-                 "previous": prev, "exists": core.get("exists")},
-        "drift": drift,
-        "patches": {"total": len(results), "counts": counts, "kinds": kinds, "rows": patch_rows,
-                    "fixed_upstream": sum(1 for n in notes if n.is_patch and n.status == "fixed-upstream"),
-                    "bugfix_no_issue": sum(1 for r in patch_rows if r["kind"] == "bugfix" and not r["upstream"]),
-                    "files": len({t for r in results for t in r.get("targets", [])}),
-                    "oldest_days": max(ages) if ages else None},
+        "verdict": verdict,
+        "core": {"exists": core.get("exists"), "version": display_version(core), "short": core.get("short"),
+                 "commit_date": core.get("commit_date"), "tag": core.get("tag"), "ahead": core.get("ahead") or 0,
+                 "installed_at": iso(upd) if upd else None, "installed_source": upd_src},
+        "upstream": upstream or {"enabled": False},
+        "drift": {"available": drift.get("available"), "unregistered": unregistered},
+        "patches": {"total": len(rows), "counts": counts, "rows": rows},
         "notes": {"total": len(notes),
                   "new_30d": sum(1 for n in notes if n.date() and (today - n.date()).days <= 30),
                   "stale": stale,
-                  "unconfirmed": sum(1 for n in notes if n.status == "needs-verification"),
-                  "areas": sorted(areas.items(), key=lambda kv: (-kv[1], kv[0]))[:3],
-                  "latest": {"date": str(latest.get("date")), "title": latest.title} if latest else None},
+                  "unconfirmed": sum(1 for n in notes if n.status == "needs-verification")},
         "lint": {"errors": sum(1 for i in lint_items if i[0] == "error"),
                  "warnings": sum(1 for i in lint_items if i[0] == "warn")},
     }
@@ -1145,10 +1265,19 @@ def _fmt_dt(ctx, ts, with_time=True):
     return text + (STRINGS[ctx.lang]["tz_note"] if is_utc and with_time else "")
 
 
+def _fmt_day(value):
+    try:
+        return dt.date.fromisoformat(str(value)[:10]).strftime("%d.%m.%Y")
+    except ValueError:
+        return str(value or "?")
+
+
 def _ago(ctx, ts):
     days = (ctx.today() - ctx.local(ts).date()).days
     s = STRINGS[ctx.lang]
-    return s["ago_today"] if days <= 0 else s["ago_days"].format(n=days)
+    if days <= 0:
+        return s["ago_today"]
+    return s["ago_1"] if days == 1 else s["ago_days"].format(n=days)
 
 
 def _issue_ref(url):
@@ -1156,114 +1285,146 @@ def _issue_ref(url):
     return f"#{m.group(1)}" if m else ("↗" if url else "")
 
 
+def _plural(n, forms):
+    """forms = (one, few, many); English uses one/many, Russian all three."""
+    n = abs(int(n))
+    if n % 10 == 1 and n % 100 != 11:
+        return forms[0]
+    if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+        return forms[1]
+    return forms[2]
+
+
+def _num(n):
+    return f"{n:,}".replace(",", " ") if isinstance(n, int) else str(n)
+
+
 def render(ctx, report, fmt="telegram"):
-    """(text, content_hash). The hash leaves out the freshness line."""
+    """(text, content_hash). The hash leaves out the 'checked at' footer."""
     s = STRINGS[ctx.lang]
     tg = fmt == "telegram"
     esc = (lambda t: html.escape(str(t), quote=False)) if tg else (lambda t: str(t))
-    bold = (lambda t: f"<b>{t}</b>") if tg else ((lambda t: f"**{t}**") if fmt == "md" else (lambda t: t))
-    core, pt, nt, dr = report["core"], report["patches"], report["notes"], report["drift"]
-    counts = pt["counts"]
+    if tg:
+        bold = lambda t: f"<b>{t}</b>"  # noqa: E731
+    elif fmt == "md":
+        bold = lambda t: f"**{t}**"  # noqa: E731
+    else:
+        bold = lambda t: t  # noqa: E731
+    core, up, pt, nt = report["core"], report["upstream"], report["patches"], report["notes"]
 
-    first = f"🩺 Hermes {esc(core['version'])} · 🩹 {counts['OK']} ✅"
-    if counts["MISSING"]:
-        first += f" · {counts['MISSING']} ❌"
-    if counts["UNKNOWN"]:
-        first += f" · {counts['UNKNOWN']} ❔"
-    first += f" · 🪤 {nt['total']}"
-    if dr.get("available") and dr.get("unregistered"):
-        first += " · ⚠️"
+    # 1. verdict line — what the pinned bar shows
+    kind, reasons = report["verdict"]
+    if kind == "ok":
+        verdict = s["v_ok"]
+    elif kind == "missing":
+        verdict = s["v_missing"].format(n=pt["counts"]["MISSING"])
+    else:
+        parts = [s["w_core"] if r == "core" else s["w_" + r[0]].format(n=r[1]) for r in reasons]
+        verdict = s["v_attention"].format(what=", ".join(parts))
+    first = f"🩺 Hermes {esc(core['version'])} — {esc(verdict)}"
+    if up.get("enabled") and up.get("relation") == "older" and up.get("latest"):
+        first += " · " + esc(s["v_new"].format(v=up["latest"]["version"]))
 
-    core_lines = [bold(esc(s["core"]))]
-    ident = " · ".join(x for x in [core["version"], core.get("tag"), core.get("short")] if x)
-    core_lines.append(esc(ident))
-    if core.get("updated_at"):
-        ts = parse_ts(core["updated_at"])
-        key = "updated" if core.get("updated_source") == "bootstrap" else "updated_first"
-        line = s[key].format(when=_fmt_dt(ctx, ts), ago=_ago(ctx, ts))
-        if core.get("previous"):
-            prev = core["previous"]
-            line += " · " + s["was"].format(v=prev.get("version"), s=short_identity(prev.get("identity")))
-        core_lines.append(esc(line))
-    if dr.get("available"):
-        if dr["unregistered"]:
-            files = ", ".join(dr["unregistered"][:3]) + ("…" if len(dr["unregistered"]) > 3 else "")
-            core_lines.append(esc(s["drift_some"].format(n=len(dr["unregistered"]), files=files)))
+    # 2. core
+    lines = [bold(esc(s["core"]))]
+    if core.get("exists"):
+        build = None
+        if up.get("relation") == "same":
+            build = "release"
+        elif up.get("relation") in ("newer", "diverged") and core.get("commit_date"):
+            build = "main"
+        if build == "release":
+            lines.append(esc(s["version_release"].format(v=core["version"], d=_fmt_day(core.get("commit_date")))))
+        elif build == "main":
+            lines.append(esc(s["version_main"].format(v=core["version"], d=_fmt_day(core["commit_date"]))))
         else:
-            core_lines.append(esc(s["drift_none"]))
-        if dr.get("registered"):
-            core_lines.append(esc(s["drift_reg"].format(n=len(dr["registered"]))))
-        if dr.get("ahead"):
-            core_lines.append(esc(s["ahead"].format(tag=dr.get("tag"), n=dr["ahead"])))
-    else:
-        core_lines.append(esc(s["drift_na"].format(reason=dr.get("reason") or "?")))
-
-    patch_lines = [bold(esc(s["patches"].format(n=pt["total"])))]
-    if pt["total"]:
-        patch_lines.append(esc(s["kinds"].format(b=pt["kinds"]["bugfix"], c=pt["kinds"]["customization"],
-                                                 w=pt["kinds"]["workaround"])))
-        patch_lines.append(esc(s["status_line"].format(ok=counts["OK"], missing=counts["MISSING"],
-                                                       unknown=counts["UNKNOWN"])))
-        patch_lines.append(esc(s["status_extra"].format(up=pt["fixed_upstream"], noissue=pt["bugfix_no_issue"])))
-        patch_lines.append(esc(s["files"].format(files=pt["files"], age=pt["oldest_days"] if pt["oldest_days"] is not None else "?")))
-    else:
-        patch_lines.append(esc(s["no_patches"]))
-
-    rows = []
-    for r in pt["rows"]:
-        parts = [f"{STATUS_ICON.get(r['status'], '•')} {esc(r['short'])}"]
-        if r["status"] != "OK":
-            word = s.get(f"st_{r['status']}", r["status"])
-            parts.append(esc(word + (f" ({r['reason']})" if r.get("reason") else "")))
-        if r.get("age") is not None:
-            parts.append(esc(s["days"].format(n=r["age"])))
-        ref = _issue_ref(r.get("upstream"))
-        if ref:
-            parts.append(f'<a href="{html.escape(r["upstream"])}">{esc(ref)}</a>' if tg and r["upstream"].startswith("http") else esc(ref))
-        rows.append(" · ".join(parts))
-    max_rows = int((ctx.cfg.get("dashboard") or {}).get("max_patches") or 40)
-
-    note_lines = [bold(esc(s["notes"].format(n=nt["total"])))]
-    note_lines.append(esc(s["notes_line"].format(new=nt["new_30d"], stale=nt["stale"], unc=nt["unconfirmed"])))
-    if nt["areas"]:
-        note_lines.append(esc(s["areas"].format(list=" · ".join(f"{a} {n}" for a, n in nt["areas"]))))
-    if nt.get("latest"):
-        d = nt["latest"]["date"]
-        try:
-            d = dt.date.fromisoformat(d).strftime("%d.%m")
-        except ValueError:
-            pass
-        title = nt["latest"]["title"]
-        title = title if len(title) <= 60 else title[:59] + "…"
-        note_lines.append(esc(s["last"].format(date=d, title=title)))
-
-    footer = s["checked"].format(when=_fmt_dt(ctx, parse_ts(report["generated_at"])),
-                                 err=report["lint"]["errors"], warn=report["lint"]["warnings"])
-    footer = f"<i>{esc(footer)}</i>" if tg else (f"_{footer}_" if fmt == "md" else footer)
-
-    def assemble(n_rows):
-        shown = rows[:n_rows]
-        block = ""
-        if shown:
-            more = len(rows) - len(shown)
-            body = "\n".join(shown + ([esc(s["more"].format(n=more))] if more > 0 else []))
-            if tg:
-                block = f"<blockquote expandable>{body}</blockquote>"
-            elif fmt == "md":
-                block = "\n".join("- " + line for line in body.split("\n"))
+            lines.append(esc(s["version_plain"].format(v=core["version"])))
+        if core.get("installed_at"):
+            ts = parse_ts(core["installed_at"])
+            if core.get("installed_source") == "bootstrap":
+                lines.append(esc(s["installed"].format(d=_fmt_day(ctx.local(ts).date().isoformat()), ago=_ago(ctx, ts))))
             else:
-                block = "\n".join("  " + line for line in body.split("\n"))
-        sections = [first, "\n".join(core_lines), "\n".join(patch_lines) + ("\n" + block if block else ""),
-                    "\n".join(note_lines)]
-        content = "\n\n".join(sections)
-        return content, content + "\n\n" + footer
+                lines.append(esc(s["seen_since"].format(d=_fmt_day(ctx.local(ts).date().isoformat()))))
+        if up.get("enabled"):
+            latest = up.get("latest") or {}
+            rel = up.get("relation")
+            if rel == "same":
+                lines.append(esc(s["rel_same"]))
+            elif rel == "newer" and latest:
+                lines.append(esc(s["rel_newer"].format(v=latest["version"], d=_fmt_day(latest["date"]))))
+            elif rel == "older" and latest:
+                lines.append(bold(esc(s["rel_older"].format(v=latest["version"], d=_fmt_day(latest["date"]),
+                                                            mine=core["version"]))))
+            elif rel == "diverged" and latest:
+                lines.append(esc(s["rel_diverged"].format(v=latest["version"], d=_fmt_day(latest["date"]))))
+            if up.get("behind_main"):
+                lines.append(esc(s["main_behind"].format(n=_num(up["behind_main"]),
+                                                         w=_plural(up["behind_main"], s["w_commit"]))))
+            elif up.get("behind_main") == 0:
+                lines.append(esc(s["main_same"]))
+            if up.get("error") and not latest:
+                lines.append(esc(s["up_error"].format(err=up["error"][:60])))
+        if report["drift"].get("unregistered"):
+            lines.append(esc(s["drift"].format(n=report["drift"]["unregistered"])))
+        if core.get("ahead"):
+            lines.append(esc(s["local_commits"].format(n=core["ahead"])))
+    else:
+        lines.append(esc(s["w_core"]))
+    sections = [first, "\n".join(lines)]
 
-    n = min(len(rows), max_rows)
-    content, text = assemble(n)
-    limit = 4000  # Telegram allows 4096 after entity parsing; markup counted here keeps a margin
-    while len(text) > limit and n > 0:
-        n -= 1
-        content, text = assemble(n)
+    # 3. patches, grouped; the OK list folds away when long
+    if pt["total"]:
+        block = [bold(esc(s["patches"].format(n=pt["total"])))]
+        for status in ("MISSING", "UNKNOWN", "UPSTREAMED", "OK", "N/A"):
+            group = [r for r in pt["rows"] if r["status"] == status]
+            if not group:
+                continue
+            items = []
+            for r in group:
+                item = "• " + esc(r["label"])
+                if r.get("reason"):
+                    item += " — " + esc(s.get("r_" + r["reason"], r["reason"]))
+                ref = _issue_ref(r.get("upstream"))
+                if ref:
+                    item += (f' <a href="{html.escape(r["upstream"])}">{esc(ref)}</a>'
+                             if tg and r["upstream"].startswith("http") else f" {esc(ref)}")
+                items.append(item)
+            block.append(esc(s["g_" + status].format(n=len(group))))
+            if tg and status in ("OK", "N/A") and len(items) > 15:
+                block.append("<blockquote expandable>" + "\n".join(items) + "</blockquote>")
+            else:
+                block.extend(items)
+        sections.append("\n".join(block))
+    else:
+        sections.append(bold(esc(s["no_patches"])))
+
+    # 4. notes, one line
+    parts = [s["n_new"].format(n=nt["new_30d"])]
+    if nt["stale"]:
+        parts.append(s["n_stale"].format(n=nt["stale"]))
+    if nt["unconfirmed"]:
+        parts.append(s["n_unc"].format(n=nt["unconfirmed"]))
+    sections.append(bold(esc(s["notes"].format(n=nt["total"]))) + " · " + esc(" · ".join(parts)))
+
+    legend = esc(s["legend"])
+    sections.append(f"<i>{legend}</i>" if tg else (f"_{legend}_" if fmt == "md" else legend))
+    content = "\n\n".join(sections)
+
+    footer = s["footer"].format(when=_fmt_dt(ctx, parse_ts(report["generated_at"])))
+    lint_n = report["lint"]["errors"]
+    if lint_n:
+        footer += s["footer_lint"].format(n=lint_n)
+    footer = f"<i>{esc(footer)}</i>" if tg else (f"_{footer}_" if fmt == "md" else footer)
+    text = content + "\n" + footer
+
+    # Telegram allows 4096 characters; fold the longest group if needed
+    limit = 4000
+    if len(text) > limit:
+        cut = text[:limit]
+        cut = cut[:cut.rfind("\n")]
+        if cut.count("<blockquote") > cut.count("</blockquote>"):
+            cut += "</blockquote>"
+        text = cut + "\n…\n" + footer
     return text, hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
@@ -1839,8 +2000,10 @@ def cmd_doctor(ctx, args):
             events.insert(0, ev)
         if core.get("exists"):
             events.extend(diff_events(state, core, results, drift, notes))
+        upstream, up_events = upstream_info(ctx, state, core)
+        events.extend(up_events)
         save_state(ctx, state)
-    report = build_report(ctx, state, notes, core, results, drift, items)
+    report = build_report(ctx, state, notes, core, results, drift, items, upstream)
     if args.json:
         out_json({"report": report, "events": events, "patches": results, "lint": items})
         return patches_exit(results)
@@ -1877,7 +2040,8 @@ def cmd_dashboard(ctx, args):
         notes, core, results, drift, items = collect(ctx, state)
         if not ctx.read_only and args.publish:
             record_core(state, core, now_utc())
-        report = build_report(ctx, state, notes, core, results, drift, items)
+        upstream, _ = upstream_info(ctx, state, core)
+        report = build_report(ctx, state, notes, core, results, drift, items, upstream)
         fmt = "telegram" if args.publish else args.format
         text, digest = render(ctx, report, fmt)
         if not args.publish:
@@ -1917,10 +2081,12 @@ def cmd_tick(ctx, args):
             events.insert(0, ev)
         if core.get("exists"):
             events.extend(diff_events(state, core, results, drift, notes))
+        upstream, up_events = upstream_info(ctx, state, core)
+        events.extend(up_events)
         save_state(ctx, state)
         d = ctx.cfg.get("dashboard") or {}
         if d.get("enabled"):
-            report = build_report(ctx, state, notes, core, results, drift, items)
+            report = build_report(ctx, state, notes, core, results, drift, items, upstream)
             text, digest = render(ctx, report, "telegram")
             token, chat, _ = dashboard_target(ctx)
             if not token or not chat:

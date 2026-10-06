@@ -13,7 +13,8 @@ verified_at: {{date}}
 summary: "<one dense line: what the patch changes in the core and why>"
 tags: []
 patch_kind: bugfix
-patch_short: "<label for the dashboard, up to ~40 characters>"
+patch_short: "<short label, up to ~40 characters>"
+patch_what: "<what the patch does, in plain words for the owner: shown on the dashboard>"
 patch_script: ""
 upstream: ""
 upstream_none_reason: ""
