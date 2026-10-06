@@ -1,0 +1,34 @@
+{
+  "_comment": "Copy to $HERMES_HOME/field-notes.json (scripts/install.py does it once) and edit. Missing keys fall back to defaults; precedence: CLI flag > FIELDNOTES_* env > this file > default. Keys starting with '_' are ignored.",
+
+  "_comment_store_dir": "Where the notes live. Empty = $HERMES_HOME/field-notes. Point several agents (or profiles) at one folder to share a store.",
+  "store_dir": "",
+
+  "_comment_hermes_root": "The hermes-agent checkout the patches are checked against. Empty = $HERMES_HOME/hermes-agent.",
+  "hermes_root": "",
+
+  "_comment_patch_scripts_base": "Base folder for relative patch_script paths in patch notes; used only to print the re-apply command. The skill never runs patch scripts.",
+  "patch_scripts_base": "",
+
+  "timezone": "Europe/Berlin",
+  "language": "en",
+
+  "_comment_drift": "Files ignored when listing core changes outside the registry: caches and the backups patch scripts leave next to the files they edit.",
+  "drift": {"ignore_globs": ["**/__pycache__/**", "*.pyc", "*.orig", "*.rej", "*.bak", "*.bak-*", "*.pre-*"]},
+
+  "_comment_dashboard": "One pinned Telegram message, edited in place by the agent's own bot. Off until you enable it. chat_id empty = TELEGRAM_HOME_CHANNEL (+ TELEGRAM_HOME_CHANNEL_THREAD_ID). An explicit chat_id never inherits the home thread: set thread_id for a forum topic. The bot must be an admin with the right to pin messages.",
+  "dashboard": {
+    "enabled": false,
+    "chat_id": "",
+    "thread_id": "",
+    "pin": true,
+    "bot_token_env": "TELEGRAM_BOT_TOKEN",
+    "freshness_hours": 6,
+    "max_patches": 40
+  },
+
+  "_comment_alerts": "How often the same failure (bot errors, missing store) may be repeated. State changes are always reported once.",
+  "alerts": {"repeat_hours": 24},
+
+  "watch": {"timeout_sec": 180}
+}

@@ -1,0 +1,9 @@
+{
+  "_comment": "The job scripts/install_cron.py creates — do not hand-edit cron/jobs.json, it is live scheduler state. no_agent: the scheduler runs the script and delivers its stdout verbatim; empty stdout = a silent run; no model is called. fieldnotes-watch.py must live in $HERMES_HOME/scripts/ (scripts/install.py copies it).",
+  "name": "Field notes: core, patches and dashboard",
+  "enabled": true,
+  "schedule": {"kind": "cron", "expr": "17 * * * *"},
+  "script": "fieldnotes-watch.py",
+  "no_agent": true,
+  "deliver": "telegram:<chat_id>:<thread_id>"
+}

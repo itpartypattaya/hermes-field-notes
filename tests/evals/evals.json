@@ -1,0 +1,56 @@
+{
+  "skill_name": "hermes-field-notes",
+  "_comment": "Trigger evals: prompts where the skill should or should not activate. Run them by hand with `hermes chat -q` in a scratch profile; the skill must be found through skills_list/skill_view without preloading.",
+  "evals": [
+    {
+      "id": 1,
+      "should_trigger": true,
+      "prompt": "The gateway stopped answering in Telegram after I ran hermes update yesterday. What do we know about this?"
+    },
+    {
+      "id": 2,
+      "should_trigger": true,
+      "prompt": "Did our local core patches survive the update?"
+    },
+    {
+      "id": 3,
+      "should_trigger": true,
+      "prompt": "That took two hours: the cron job was silent because the worker never started without linger. Write it down so we don't do this again."
+    },
+    {
+      "id": 4,
+      "should_trigger": true,
+      "prompt": "I need to edit gateway/run.py in hermes-agent to fix the reaction bug. Go ahead."
+    },
+    {
+      "id": 5,
+      "should_trigger": true,
+      "prompt": "Pin a status message in the ops topic with the core version and our patches."
+    },
+    {
+      "id": 6,
+      "should_trigger": true,
+      "prompt": "Draft an upstream issue for the quota-before-auth patch."
+    },
+    {
+      "id": 7,
+      "should_trigger": false,
+      "prompt": "Remind me to buy milk at 6 pm."
+    },
+    {
+      "id": 8,
+      "should_trigger": false,
+      "prompt": "Write a README for my Python project."
+    },
+    {
+      "id": 9,
+      "should_trigger": false,
+      "prompt": "Fix the typo in this paragraph."
+    },
+    {
+      "id": 10,
+      "should_trigger": false,
+      "prompt": "Summarise today's news about AI."
+    }
+  ]
+}

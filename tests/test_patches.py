@@ -1,0 +1,241 @@
+"""Patches: static checks, editions, safety, drift, core identity, doctor events, read-only."""
+
+from __future__ import annotations
+
+import json
+import os
+import unittest
+
+from _helpers import HomeCase, fn
+
+PATCHED = "x = 1  # MYPATCH_A\nnew_code()\n"
+PRISTINE = "x = 1\nold_code()\n"
+
+
+class CheckTest(HomeCase):
+    def status(self, note_id):
+        ctx = self.ctx()
+        notes = fn.load_notes(ctx)
+        core = fn.core_info(ctx)
+        return {r["id"]: r for r in fn.check_patches(ctx, notes, core)}[note_id]
+
+    def test_ok_missing_partial(self):
+        self.make_core(files={"gw/run.py": PATCHED})
+        self.write_patch("2026-01-01-a", "gw/run.py", ["MYPATCH_A", "new_code()"], not_contains=["old_code()"])
+        self.assertEqual(self.status("2026-01-01-a")["status"], "OK")
+        (self.core / "gw/run.py").write_text(PRISTINE, encoding="utf-8")
+        self.assertEqual(self.status("2026-01-01-a")["status"], "MISSING")
+        # marker survived, the code under it did not: not a false green
+        (self.core / "gw/run.py").write_text("x = 1  # MYPATCH_A\nold_code()\n", encoding="utf-8")
+        r = self.status("2026-01-01-a")
+        self.assertEqual((r["status"], r["reason"]), ("UNKNOWN", "partial"))
+
+    def test_upstreamed_conflict_target_gone(self):
+        self.make_core(files={"gw/run.py": "def upstream_fix(): pass\n"})
+        up = [{"file": "gw/run.py", "contains": ["def upstream_fix("]}]
+        self.write_patch("2026-01-01-a", "gw/run.py", ["MYPATCH_A"], upstream_rules=up)
+        self.assertEqual(self.status("2026-01-01-a")["status"], "UPSTREAMED")
+        (self.core / "gw/run.py").write_text("def upstream_fix(): pass  # MYPATCH_A\n", encoding="utf-8")
+        r = self.status("2026-01-01-a")
+        self.assertEqual((r["status"], r["reason"]), ("UNKNOWN", "conflict"))
+        self.write_patch("2026-01-02-b", "gw/gone.py", ["MYPATCH_B"])
+        r = self.status("2026-01-02-b")
+        self.assertEqual((r["status"], r["reason"]), ("UNKNOWN", "target_gone"))
+
+    def test_multi_target_mixed_is_partial(self):
+        self.make_core(files={"a.py": "MARK", "b.py": "nothing"})
+        self.write_patch("2026-01-01-a", None, None, editions=[{"targets": [
+            {"file": "a.py", "contains": ["MARK"]}, {"file": "b.py", "contains": ["MARK"]}]}])
+        r = self.status("2026-01-01-a")
+        self.assertEqual((r["status"], r["reason"]), ("UNKNOWN", "partial"))
+
+    def test_editions_by_version_and_na(self):
+        editions = [{"when": {"min_version": "0.21.3"}, "targets": [{"file": "a.py", "contains": ["NEW"]}]},
+                    {"when": {"max_version": "0.20.9"}, "targets": [{"file": "a.py", "contains": ["OLD"]}]}]
+        self.make_core(version="0.21.5", files={"a.py": "NEW"})
+        self.write_patch("2026-01-01-a", None, None, editions=editions)
+        self.assertEqual(self.status("2026-01-01-a")["status"], "OK")
+        (self.core / "pyproject.toml").write_text('version = "0.20.1"\n', encoding="utf-8")
+        self.assertEqual(self.status("2026-01-01-a")["status"], "MISSING")   # OLD edition, OLD sign absent
+        (self.core / "pyproject.toml").write_text('version = "0.21.1"\n', encoding="utf-8")
+        self.assertEqual(self.status("2026-01-01-a")["status"], "N/A")
+
+    def test_dev_build_version_unknown(self):
+        editions = [{"when": {"min_version": "0.21.3"}, "targets": [{"file": "a.py", "contains": ["NEW"]}]}]
+        self.make_core(version="0.0.0", files={"a.py": "NEW"})
+        self.write_patch("2026-01-01-a", None, None, editions=editions)
+        r = self.status("2026-01-01-a")
+        self.assertEqual((r["status"], r["reason"]), ("UNKNOWN", "version_unknown"))
+
+    def test_dev_build_named_by_tag(self):
+        editions = [{"when": {"min_version": "0.21.3"}, "targets": [{"file": "a.py", "contains": ["NEW"]}]}]
+        self.make_core(version="0.0.0", files={"a.py": "NEW"}, git=True)
+        self.git("tag", "rc.33-v0.21.5")
+        self.write_patch("2026-01-01-a", None, None, editions=editions)
+        self.assertEqual(self.status("2026-01-01-a")["status"], "OK")
+
+    def test_path_escape_rejected(self):
+        self.make_core(files={"a.py": "x"})
+        outside = self.tmp / "secret.py"
+        outside.write_text("MARK", encoding="utf-8")
+        self.assertIsNone(fn.safe_target(self.core, "../secret.py"))
+        self.assertIsNone(fn.safe_target(self.core, "/etc/passwd"))
+        self.assertIsNone(fn.safe_target(self.core, "C:/x"))
+        try:
+            (self.core / "link.py").symlink_to(outside)
+        except (OSError, NotImplementedError):
+            return  # no symlink privilege (Windows)
+        self.assertIsNone(fn.safe_target(self.core, "link.py"))
+
+    def test_retired_notes_are_not_checked_and_exit_codes(self):
+        self.make_core(files={"a.py": ""})
+        self.write_patch("2026-01-01-gone", "a.py", ["M"], status="fixed-upstream")
+        code, out, _ = self.run_cli("patches", "check")
+        self.assertEqual(code, 0)
+        self.assertIn("0 live patches", out)
+        self.write_patch("2026-01-02-miss", "a.py", ["M"])
+        code, _, _ = self.run_cli("patches", "check")
+        self.assertEqual(code, 2)
+        self.write_patch("2026-01-03-unk", "nope.py", ["M"])
+        code, out, _ = self.run_cli("patches", "check")
+        self.assertEqual(code, 3)
+        self.assertIn("file not found", out)
+        code, out, _ = self.run_cli("patches", "check", "--json")
+        data = json.loads(out)
+        self.assertEqual(len(data["patches"]), 2)
+
+    def test_core_missing(self):
+        self.write_patch("2026-01-01-a", "a.py", ["M"])
+        code, _, err = self.run_cli("patches", "check")
+        self.assertEqual(code, 4)
+        self.assertIn("core not found", err)
+
+
+class DriftTest(HomeCase):
+    def test_not_git(self):
+        self.make_core(files={"a.py": "x"})
+        code, out, _ = self.run_cli("drift")
+        self.assertIn("not a git checkout", out)
+
+    def test_staged_unstaged_untracked_registered(self):
+        self.make_core(files={"a.py": "x\n", "b.py": "y\n", "c.py": "z\n"}, git=True)
+        self.write_patch("2026-01-01-a", "a.py", ["MARK"])
+        (self.core / "a.py").write_text("x\nMARK\n", encoding="utf-8")          # registered file
+        (self.core / "b.py").write_text("y changed\n", encoding="utf-8")        # unstaged, unregistered
+        (self.core / "c.py").write_text("z changed\n", encoding="utf-8")
+        self.git("add", "c.py")                                                 # staged, unregistered
+        (self.core / "new.py").write_text("n\n", encoding="utf-8")              # untracked
+        (self.core / "a.py.pre-mypatch").write_text("backup\n", encoding="utf-8")  # ignored by default globs
+        code, out, _ = self.run_cli("drift", "--json")
+        d = json.loads(out)
+        self.assertTrue(d["available"])
+        self.assertEqual(d["registered"], ["a.py"])
+        self.assertEqual(sorted(d["unregistered"]), ["b.py", "c.py"])
+        self.assertEqual(d["untracked"], ["new.py"])
+
+    def test_local_commits_ahead_of_tag(self):
+        self.make_core(files={"a.py": "x\n"}, git=True)
+        (self.core / "a.py").write_text("x2\n", encoding="utf-8")
+        self.git("-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qam", "local")
+        ctx = self.ctx()
+        core = fn.core_info(ctx)
+        self.assertEqual(core["ahead"], 1)
+        self.assertEqual(core["tag"], "v0.21.5")
+
+
+class DoctorTest(HomeCase):
+    def test_events_on_change_and_recovery(self):
+        self.make_core(files={"a.py": "MARK"}, git=True)
+        self.write_patch("2026-01-01-a", "a.py", ["MARK"], patch_short="Patch A")
+        ctx = self.ctx()
+        state = fn.load_state(ctx)
+
+        def tick():
+            notes, core, results, drift, _ = fn.collect(ctx)
+            ev = fn.record_core(state, core, fn.now_utc())
+            events = ([ev] if ev else []) + fn.diff_events(state, core, results, drift, notes)
+            return [e["kind"] for e in events]
+
+        self.assertEqual(tick(), [])                         # first run, all fine: silence
+        self.assertEqual(tick(), [])                         # nothing changed: silence
+        (self.core / "a.py").write_text("plain", encoding="utf-8")
+        self.git("-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qam", "update")
+        self.assertEqual(tick(), ["core_changed", "patch_MISSING"])
+        self.assertEqual(tick(), [])                         # still missing: no repeat
+        (self.core / "b.py").write_text("x", encoding="utf-8")
+        self.git("add", "b.py")
+        self.assertEqual(tick(), ["drift_new"])
+        self.git("rm", "-q", "--cached", "b.py")
+        (self.core / "b.py").unlink()
+        (self.core / "a.py").write_text("MARK", encoding="utf-8")
+        kinds = tick()
+        self.assertIn("patch_back", kinds)
+        self.assertIn("drift_clear", kinds)
+
+    def test_rollback_detected(self):
+        self.make_core(files={"a.py": "1"}, git=True)
+        ctx = self.ctx()
+        state = fn.load_state(ctx)
+        fn.record_core(state, fn.core_info(ctx), fn.now_utc())
+        first = fn.core_info(ctx)["identity"]
+        (self.core / "a.py").write_text("2", encoding="utf-8")
+        self.git("-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qam", "u")
+        self.assertEqual(fn.record_core(state, fn.core_info(ctx), fn.now_utc())["kind"], "core_changed")
+        self.git("checkout", "-q", first)
+        self.assertEqual(fn.record_core(state, fn.core_info(ctx), fn.now_utc())["kind"], "core_rollback")
+
+    def test_bootstrap_record_is_used(self):
+        self.make_core(files={"a.py": "1"}, git=True)
+        ident = fn.core_info(self.ctx())["identity"]
+        rec = self.home / "installs" / "abc" / "bootstrap"
+        rec.mkdir(parents=True)
+        (rec / "default.json").write_text(json.dumps({"identity": ident, "bootstrappedAt": "2026-09-30T19:45:10+0700"}),
+                                          encoding="utf-8")
+        self.assertEqual(fn.core_info(self.ctx())["bootstrapped_at"], "2026-09-30T12:45:10Z")
+
+    def test_doctor_read_only_writes_nothing(self):
+        self.make_core(files={"a.py": "MARK"}, git=True)
+        self.write_patch("2026-01-01-a", "a.py", ["MARK"])
+        before = self.files_snapshot()
+        for argv in (["doctor", "--read-only"], ["patches", "check", "--read-only"], ["drift", "--read-only"],
+                     ["dashboard", "--format", "text", "--read-only"], ["lint", "--read-only"],
+                     ["search", "x", "--read-only"]):
+            self.run_cli(*argv)
+        self.assertEqual(before, self.files_snapshot())
+
+    def test_doctor_writes_state_and_text(self):
+        self.make_core(files={"a.py": "MARK"}, git=True)
+        self.write_patch("2026-01-01-a", "a.py", ["MARK"], patch_short="Patch A")
+        code, out, _ = self.run_cli("doctor")
+        self.assertEqual(code, 0, out)
+        self.assertIn("all live patches have their signs in place", out)
+        state = json.loads((self.home / "cache" / "field-notes-state.json").read_text(encoding="utf-8"))
+        self.assertEqual(state["last_check"]["patches"], {"2026-01-01-a": "OK"})
+        self.assertFalse((self.home / "cache" / "field-notes.lock").exists())
+
+    def test_corrupt_state_recovers(self):
+        self.make_core(files={"a.py": "MARK"})
+        (self.home / "cache").mkdir()
+        (self.home / "cache" / "field-notes-state.json").write_text("{broken", encoding="utf-8")
+        code, out, _ = self.run_cli("doctor")
+        self.assertIn("state file was unreadable", out)
+        self.assertTrue((self.home / "cache" / "field-notes-state.json.corrupt").is_file())
+
+    def test_explicit_paths_fail_loudly(self):
+        code, _, err = self.run_cli("doctor", "--hermes-home", str(self.tmp / "nope"))
+        self.assertEqual(code, 4)
+        code, _, err = self.run_cli("doctor", "--config", str(self.tmp / "nope.json"))
+        self.assertEqual(code, 4)
+
+    def test_precedence_cli_env_file(self):
+        (self.home / "field-notes.json").write_text(json.dumps({"store_dir": str(self.tmp / "from-file"),
+                                                                "language": "ru"}), encoding="utf-8")
+        self.assertEqual(self.ctx().store, self.tmp / "from-file")
+        self.assertEqual(self.ctx().lang, "ru")
+        os.environ["FIELDNOTES_STORE_DIR"] = str(self.tmp / "from-env")
+        self.assertEqual(self.ctx().store, self.tmp / "from-env")
+        self.assertEqual(self.ctx(root=str(self.tmp / "from-cli")).store, self.tmp / "from-cli")
+
+
+if __name__ == "__main__":
+    unittest.main()

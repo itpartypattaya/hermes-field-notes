@@ -1,0 +1,15 @@
+{
+  "_comment": "Static checks of one patch. Each edition applies to a range of core versions; the first edition whose bounds hold is used. targets: files relative to the hermes-agent root. contains: signs that must ALL be present after the patch (a unique marker comment plus a line of the new code is a good pair). not_contains: signs of the unpatched code that must be gone. upstream: signs that the core itself now contains the fix. Nothing here is executed.",
+  "schema_version": 1,
+  "editions": [
+    {
+      "when": {"min_version": "0.21.0"},
+      "targets": [
+        {"file": "path/inside/hermes-agent.py",
+         "contains": ["MY_PATCH_MARKER"],
+         "not_contains": []}
+      ],
+      "upstream": []
+    }
+  ]
+}
