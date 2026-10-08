@@ -36,7 +36,7 @@ import urllib.error  # noqa: E402
 import urllib.request  # noqa: E402
 from pathlib import Path  # noqa: E402
 
-VERSION = "1.2.1"
+VERSION = "1.2.2"
 SCHEMA_VERSION = 1
 SKILL_DIR = Path(__file__).resolve().parents[1]
 ASSETS = SKILL_DIR / "assets"
@@ -50,6 +50,7 @@ STATUSES = ("active", "workaround", "fixed-upstream", "obsolete", "promoted", "n
 LIVE_STATUSES = ("active", "workaround", "needs-verification")
 PATCH_KINDS = ("bugfix", "customization", "workaround")
 REQUIRED = ("schema_version", "id", "title", "date", "type", "area", "status", "summary")
+SUPPORTED_SCHEMAS = ("1",)
 REQUIRED_PATCH = ("patch_kind", "patch_short")
 
 EXIT_OK, EXIT_ERR, EXIT_MISSING, EXIT_UNKNOWN, EXIT_NOTFOUND = 0, 1, 2, 3, 4
@@ -69,14 +70,19 @@ DEFAULTS = {
     "upstream": {"check": True, "repo": "NousResearch/hermes-agent", "branch": "main", "check_hours": 12},
 }
 
+_TOK = r"[A-Za-z0-9_-]"  # the alphabet of most tokens; boundaries use it, not \b (a token may end in '-')
 SECRET_PATTERNS = [
-    ("openai-style key", re.compile(r"\bsk-[A-Za-z0-9_-]{20,}")),
-    ("github token", re.compile(r"\b(ghp|gho|ghs|ghu)_[A-Za-z0-9]{30,}|\bgithub_pat_[A-Za-z0-9_]{30,}")),
-    ("slack token", re.compile(r"\bxox[abposr]-[A-Za-z0-9-]{10,}")),
-    ("aws key id", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
-    ("private key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
-    ("telegram bot token", re.compile(r"\b\d{8,10}:[A-Za-z0-9_-]{35}\b")),
-    ("bearer token", re.compile(r"\bBearer\s+[A-Za-z0-9._~+/-]{20,}")),
+    ("openai-style key", re.compile(r"(?<![\w-])sk-[A-Za-z0-9_-]{20,}")),
+    ("stripe key", re.compile(r"(?<![\w-])[rs]k_(?:live|test)_[A-Za-z0-9]{16,}")),
+    ("github token", re.compile(r"(?<![\w-])gh[pousr]_[A-Za-z0-9]{30,}|(?<![\w-])github_pat_[A-Za-z0-9_]{30,}")),
+    ("gitlab token", re.compile(r"(?<![\w-])gl(?:pat|dt|rt|ptt|cbt)-[A-Za-z0-9_-]{20,}")),
+    ("slack token", re.compile(r"(?<![\w-])xox[abposr]-[A-Za-z0-9-]{10,}")),
+    ("aws key id", re.compile(r"(?<![A-Z0-9])(?:AKIA|ASIA)[0-9A-Z]{16}(?![A-Z0-9])")),
+    ("google api key", re.compile(r"(?<![\w-])AIza[0-9A-Za-z_-]{35}")),
+    ("private key", re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----")),
+    ("telegram bot token", re.compile(r"(?<![\w-])\d{8,10}:" + _TOK + r"{35}(?!" + _TOK + r")")),
+    ("bearer token", re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{20,}")),
+    ("jwt", re.compile(r"(?<![\w-])eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}")),
 ]
 
 
@@ -229,66 +235,54 @@ def read_env_value(home, name):
 # ---------------------------------------------------------------------------
 
 class Lock:
-    """O_CREAT|O_EXCL lock file next to the state; a lock older than `stale` seconds is broken."""
+    """OS file lock (`fcntl.flock` / `msvcrt.locking`) held by an open descriptor. The OS releases it
+    when the owner exits, so there are no stale locks and a live owner's lock is never broken by age.
+    The lock file itself is left in place."""
 
-    def __init__(self, path, stale=600, wait=30):
-        self.path, self.stale, self.wait = Path(path), stale, wait
-        self.held = False
+    def __init__(self, path, wait=30):
+        self.path, self.wait = Path(path), wait
+        self.fh = None
+
+    def _try(self):
+        if os.name == "nt":
+            import msvcrt
+            self.fh.seek(0)
+            msvcrt.locking(self.fh.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(self.fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
 
     def __enter__(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.fh = open(self.path, "a+b")
         deadline = time.monotonic() + self.wait
-        self.token = f"{os.getpid()}:{time.time_ns()}"
         while True:
             try:
-                fd = os.open(str(self.path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                os.write(fd, self.token.encode())
-                os.close(fd)
-                self.held = True
+                self._try()
                 return self
-            except FileExistsError:
-                try:
-                    age = time.time() - self.path.stat().st_mtime
-                    owner = self.path.read_text(encoding="utf-8", errors="replace")
-                except OSError:
-                    continue
-                if age > self.stale and not _pid_alive(owner.split(":", 1)[0]):
-                    try:
-                        self.path.unlink()
-                    except OSError:
-                        pass
-                    continue
+            except OSError:
                 if time.monotonic() > deadline:
+                    self.fh.close()
+                    self.fh = None
                     raise FieldNotesError(f"another fieldnotes run holds {self.path}")
-                time.sleep(0.2)
+                time.sleep(0.1)
 
     def __exit__(self, *exc):
-        if self.held:
-            try:
-                if self.path.read_text(encoding="utf-8", errors="replace") == self.token:
-                    self.path.unlink()
-            except OSError:
-                pass
-
-
-def _pid_alive(pid_text):
-    """True if the process may still run. Unknown (Windows, garbage) counts as alive only when
-    the pid is this process; elsewhere a stale lock older than `stale` is broken."""
-    try:
-        pid = int(pid_text)
-    except ValueError:
-        return False
-    if pid == os.getpid():
-        return True
-    if os.name != "posix":
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except OSError:
-        return True
-    return True
+        if self.fh is None:
+            return
+        try:
+            if os.name == "nt":
+                import msvcrt
+                self.fh.seek(0)
+                msvcrt.locking(self.fh.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self.fh.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+        finally:
+            self.fh.close()
+            self.fh = None
 
 
 def atomic_write(path, text, mode=None):
@@ -341,6 +335,7 @@ def save_state(ctx, state):
 # frontmatter: a flat YAML subset that yaml.safe_load also reads
 # ---------------------------------------------------------------------------
 
+_OPENER = re.compile(r"---[ \t]*\n")
 _KEY_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_-]*)\s*:(?:\s+(.*))?$")
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _BARE_OK = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-/]*$")
@@ -349,11 +344,17 @@ _YAML_WORDS = {"yes", "no", "on", "off", "true", "false", "null", "y", "n", "~"}
 
 
 def _strip_comment(raw):
-    out, quote = [], None
+    """Cut a `#` comment outside quotes. Inside "…" a backslash escapes the next character, so
+    `"C:\\\\"` closes at the second quote; an unclosed quote is an error."""
+    out, quote, escaped = [], None, False
     for i, ch in enumerate(raw):
         if quote:
             out.append(ch)
-            if ch == quote and not (quote == '"' and i and raw[i - 1] == "\\"):
+            if escaped:
+                escaped = False
+            elif ch == "\\" and quote == '"':
+                escaped = True
+            elif ch == quote:
                 quote = None
             continue
         if ch in "\"'":
@@ -361,17 +362,26 @@ def _strip_comment(raw):
         elif ch == "#" and (i == 0 or raw[i - 1] in " \t"):
             break
         out.append(ch)
+    if quote:
+        raise ValueError("unclosed quote")
     return "".join(out).strip()
 
 
 def _unquote(token):
     token = token.strip()
-    if len(token) >= 2 and token[0] == token[-1] == '"':
+    if token[:1] == '"':
+        if len(token) < 2 or token[-1] != '"':
+            raise ValueError(f"unclosed quoted value: {token[:40]}")
         try:
-            return json.loads(token)
+            value = json.loads(token)
         except ValueError:
-            return token[1:-1]
-    if len(token) >= 2 and token[0] == token[-1] == "'":
+            raise ValueError(f"broken quoted value: {token[:40]}") from None
+        if not isinstance(value, str):
+            raise ValueError(f"broken quoted value: {token[:40]}")
+        return value
+    if token[:1] == "'":
+        if len(token) < 2 or token[-1] != "'":
+            raise ValueError(f"unclosed quoted value: {token[:40]}")
         return token[1:-1].replace("''", "'")
     return token
 
@@ -397,14 +407,19 @@ def _split_list(inner):
             buf = []
         else:
             buf.append(ch)
+    if quote:
+        raise ValueError("unclosed quote in a list")
     if "".join(buf).strip():
         items.append("".join(buf))
     return [_unquote(i) for i in items if i.strip()]
 
 
 def parse_value(raw):
+    """The value of a field; ValueError when it is broken (quotes, brackets)."""
     raw = _strip_comment(raw or "")
-    if raw.startswith("[") and raw.endswith("]"):
+    if raw.startswith("["):
+        if not raw.endswith("]"):
+            raise ValueError("list is not closed with ']'")
         return _split_list(raw[1:-1])
     return _unquote(raw)
 
@@ -412,13 +427,15 @@ def parse_value(raw):
 def split_frontmatter(text):
     """(meta, keys_in_order, body, errors). Notes without frontmatter return an empty meta."""
     text = text.lstrip("\ufeff").replace("\r\n", "\n")
-    if not text.startswith("---\n"):
+    opener = _OPENER.match(text)
+    if not opener:
         return {}, [], text, ["no frontmatter (file must start with '---')"]
-    m = re.search(r"^---[ \t]*$", text[4:], re.MULTILINE)
+    start = opener.end()
+    m = re.search(r"^---[ \t]*$", text[start:], re.MULTILINE)
     if not m:
         return {}, [], text, ["frontmatter is not closed with a '---' line"]
-    block = text[4:4 + m.start()].rstrip("\n")
-    rest = text[4 + m.end():]
+    block = text[start:start + m.start()].rstrip("\n")
+    rest = text[start + m.end():]
     body = rest[1:] if rest.startswith("\n") else rest
     meta, order, errors = {}, [], []
     for n, line in enumerate(block.split("\n"), start=2):
@@ -435,7 +452,11 @@ def split_frontmatter(text):
         if key in meta:
             errors.append(f"line {n}: duplicate key '{key}'")
             continue
-        meta[key] = parse_value(m.group(2) or "")
+        try:
+            meta[key] = parse_value(m.group(2) or "")
+        except ValueError as exc:
+            errors.append(f"line {n}: {exc}")
+            continue
         order.append(key)
     return meta, order, body, errors
 
@@ -515,6 +536,8 @@ class Note:
 
     def date(self, key="date"):
         value = str(self.get(key) or "")
+        if not _DATE_RE.match(value):  # fromisoformat on 3.11+ also takes 20260101 and 2026-W01-1
+            return None
         try:
             return dt.date.fromisoformat(value)
         except ValueError:
@@ -924,6 +947,9 @@ def lint(ctx, notes, core=None):
             for key in REQUIRED_PATCH:
                 if m.get(key) in (None, ""):
                     out.append(("error", where, f"patch note missing '{key}'"))
+        if m.get("schema_version") not in (None, "") and str(m.get("schema_version")) not in SUPPORTED_SCHEMAS:
+            out.append(("error", where, f"schema_version {m.get('schema_version')!r} is not supported "
+                                        f"(this script reads {', '.join(SUPPORTED_SCHEMAS)})"))
         checks = [("type", TYPES), ("area", AREAS), ("status", STATUSES)]
         if note.is_patch:
             checks.append(("patch_kind", PATCH_KINDS))
@@ -1049,22 +1075,32 @@ def known_pitfalls():
     return out
 
 
+def _is_exact(word):
+    """Short words and words with + or # are matched as whole words: otherwise "r" matches any text
+    and "go" matches "google"."""
+    return len(word) <= 2 or bool(re.search(r"[+#]", word))
+
+
+def _count(text, word):
+    if _is_exact(word):
+        return len(re.findall(r"(?<![\w+#])" + re.escape(word) + r"(?![\w+#])", text))
+    return text.count(word)
+
+
 def search(notes, terms, limit=10):
-    words = [w.lower() for w in terms if w.strip()]
+    words = [w.strip().lower() for w in terms if w.strip()]
     hits = []
     for note in notes:
         fields = [(note.title, 3), (note.get("summary"), 2), (" ".join(note.get("tags") or []), 2),
                   (note.get("area"), 1), (note.body, 1)]
-        score = 0
-        for text, weight in fields:
-            low = str(text or "").lower()
-            score += sum(weight * low.count(w) for w in words if w in low)
-        if score and all(any(w in str(t or "").lower() for t, _ in fields) for w in words):
+        lows = [(str(text or "").lower(), weight) for text, weight in fields]
+        score = sum(weight * _count(low, w) for low, weight in lows for w in words)
+        if score and all(any(_count(low, w) for low, _ in lows) for w in words):
             hits.append((score, "note", note))
     for title, text in known_pitfalls():
         low_t, low_b = title.lower(), text.lower()
-        if all(w in low_t or w in low_b for w in words):
-            score = sum(3 * low_t.count(w) + low_b.count(w) for w in words)
+        if all(_count(low_t, w) or _count(low_b, w) for w in words):
+            score = sum(3 * _count(low_t, w) + _count(low_b, w) for w in words)
             hits.append((score, "known", (title, text)))
     hits.sort(key=lambda h: -h[0])
     return hits[:limit], len(notes), len(known_pitfalls())
@@ -1728,10 +1764,15 @@ def format_events(ctx, state, events):
 # issue draft and migration
 # ---------------------------------------------------------------------------
 
+# a user name in a path: without spaces — up to the separator; with spaces — only when a separator
+# follows ("C:\Users\First Last\x"), otherwise the word after the space is ordinary text
+_USER = r"""(?:[^\\/\s"'`<>|]+(?: [^\\/\s"'`<>|]+)+(?=[\\/])|[^\\/\s"'`<>|]+)"""
 MASKS = [
-    (re.compile(r"/home/[^/\s]+"), "~"),
-    (re.compile(r"/Users/[^/\s]+"), "~"),
-    (re.compile(r"[A-Za-z]:\\Users\\[^\\\s]+", re.IGNORECASE), "~"),
+    (re.compile(r"/[a-zA-Z]/Users/" + _USER), "~"),                    # Git Bash: /c/Users/<name>
+    (re.compile(r"[A-Za-z]:[\\/]+Users[\\/]+" + _USER, re.IGNORECASE), "~"),
+    (re.compile(r"\b[A-Za-z]--Users-[^\s/\\]+"), "~"),                  # Claude project slug C--Users-<name>-…
+    (re.compile(r"/home/" + _USER), "~"),
+    (re.compile(r"/Users/" + _USER), "~"),
     (re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b"), "<ip>"),
     (re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+"), "<email>"),
     (re.compile(r"-100\d{6,}"), "<chat_id>"),
@@ -1811,12 +1852,17 @@ def migrate_note(path, index_rows):
     text = Path(path).read_text(encoding="utf-8").replace("\r\n", "\n").lstrip("\ufeff")
     stem = Path(path).stem
     problems = []
-    meta, order, body, errors = split_frontmatter(text) if text.startswith("---\n") else ({}, [], text, [])
+    has_fm = bool(re.match(r"---[ \t]*$", text.split("\n", 1)[0]))
+    meta, order, body, errors = split_frontmatter(text) if has_fm else ({}, [], text, [])
     if errors:
         problems.extend(errors)
     if not meta:
-        m = re.search(r"\*\*Date:\*\*\s*([\d-]+).*?\*\*Area:\*\*\s*([^·\n]+).*?\*\*Status:\*\*\s*([^·\n]+)", text)
-        title = re.search(r"^#\s+(.+)$", text, re.MULTILINE)
+        # legacy header: the first non-empty line is "# Title", the next non-empty one the bullet line;
+        # the same line anywhere else (an example in a code block) is not metadata
+        head = re.match(r"\A\s*#[ \t]+[^\n]+\n(?:[ \t]*\n)*(-\s+\*\*Date:\*\*[^\n]*)", text)
+        m = re.search(r"\*\*Date:\*\*\s*([\d-]+).*?\*\*Area:\*\*\s*([^·\n]+).*?\*\*Status:\*\*\s*([^·\n]+)",
+                      head.group(1)) if head else None
+        title = re.match(r"\A\s*#[ \t]+([^\n]+)", text)
         meta = {"title": title.group(1).strip() if title else stem}
         if m:
             meta.update(date=m.group(1), area_raw=m.group(2).strip(), status_raw=m.group(3).strip())
@@ -1871,7 +1917,10 @@ def out_json(data):
 
 
 def cmd_root(ctx, args):
-    print(ctx.store)
+    if args.json:
+        out_json({"root": str(ctx.store), "exists": ctx.notes_dir.is_dir()})
+    else:
+        print(ctx.store)
     return EXIT_OK
 
 

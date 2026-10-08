@@ -272,5 +272,108 @@ class ReviewFixesNotesTest(HomeCase):
         self.assertFalse((self.store / "notes" / "2025-05-01-x.md").exists())
         self.assertFalse((self.store / "notes" / "2025-05-01-x.checks.json").exists())
 
+class ReviewFixes122Test(HomeCase):
+    """Ported from field-notes 2.0.1 (Codex review of the sibling skill)."""
+
+    def test_os_lock_is_not_broken_while_owner_lives(self):
+        import subprocess
+        import sys
+        from _helpers import SCRIPTS
+        lock_path = self.tmp / "x.lock"
+        holder = subprocess.Popen(
+            [sys.executable, "-c",
+             "import sys, time; sys.path.insert(0, sys.argv[1]); import fieldnotes as fn\n"
+             "with fn.Lock(sys.argv[2]):\n    print('held', flush=True); time.sleep(4)",
+             str(SCRIPTS), str(lock_path)], stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(holder.stdout.readline().strip(), "held")
+            old = os.path.getmtime(lock_path) - 7200
+            os.utime(lock_path, (old, old))          # an "old" lock is no longer broken by age
+            with self.assertRaises(fn.FieldNotesError):
+                with fn.Lock(lock_path, wait=0.5):
+                    pass
+        finally:
+            holder.kill()
+            holder.wait()
+            holder.stdout.close()
+        with fn.Lock(lock_path, wait=2):             # the owner died — the OS released the lock
+            pass
+
+    def test_quotes_and_opener(self):
+        self.assertTrue(fn.split_frontmatter('---\ntitle: "unfinished\n---\n')[3])
+        self.assertTrue(fn.split_frontmatter("---\ntags: [a, b\n---\n")[3])
+        meta, _, _, errors = fn.split_frontmatter('---\ncustom: "C:\\\\" # annotation\n---\n')
+        self.assertEqual((meta, errors), ({"custom": "C:\\"}, []))
+        meta, _, _, errors = fn.split_frontmatter("--- \ntitle: x\n---\nbody\n")
+        self.assertEqual((meta, errors), ({"title": "x"}, []))
+
+    def test_migrate_reads_header_only_after_the_title(self):
+        src = self.tmp / "old"
+        src.mkdir()
+        (src / "2025-05-01-x.md").write_text(
+            "# Note\n\nText.\n\n```\n- **Date:** 2020-01-01 · **Area:** cron · **Status:** obsolete\n```\n",
+            encoding="utf-8")
+        self.run_cli("migrate", "--from", str(src), "--apply")
+        note = fn.Note(self.store / "notes" / "2025-05-01-x.md")
+        self.assertEqual((note.status, str(note.get("date"))), ("active", "2025-05-01"))
+        self.assertIn("**Status:** obsolete", note.body)          # the example stays in the body
+
+    def test_damaged_frontmatter_with_spaced_opener_is_skipped(self):
+        src = self.tmp / "old"
+        src.mkdir()
+        (src / "2025-05-01-x.md").write_text('--- \ntitle: "broken\n---\nbody\n', encoding="utf-8")
+        code, out, _ = self.run_cli("migrate", "--from", str(src), "--apply")
+        self.assertIn("SKIPPED", out)
+        self.assertFalse((self.store / "notes" / "2025-05-01-x.md").exists())
+
+    def test_mask_user_names_with_spaces_and_slugs(self):
+        for raw in ("C:\\Users\\First Last\\project", "/home/First Last/project",
+                    "/c/Users/First Last/project", "C:/Users/First Last/x",
+                    "~/.claude/projects/C--Users-First-Last-Documents-x/a.jsonl"):
+            with self.subTest(raw=raw):
+                masked = fn.mask(raw)
+                self.assertNotIn("First", masked)
+                self.assertNotIn("Last", masked)
+        self.assertEqual(fn.mask("C:\\Users\\anton is home"), "~ is home")
+
+    def test_tokens_masked_and_linted(self):
+        tokens = ["123456789:" + "A" * 34 + "-", "ghr_" + "a" * 36, "glpat-" + "a" * 20,
+                  "bearer " + "a" * 30, "AIza" + "b" * 35, "sk_live_" + "c" * 24,
+                  "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijklmnop"]
+        for tok in tokens:
+            with self.subTest(tok=tok[:12]):
+                self.assertNotIn(tok, fn.mask("x " + tok + " y"))
+                for old in (self.store / "notes").glob("*.md"):
+                    old.unlink()
+                self.write_note("2026-09-01-a", summary="key " + tok)
+                msgs = [m for lvl, _, m in fn.lint(self.ctx(), fn.load_notes(self.ctx())) if lvl == "error"]
+                self.assertTrue(any("secret" in m for m in msgs), msgs)
+
+    def test_strict_dates_and_schema_version(self):
+        for meta, needle in ((dict(date="20260101"), "date must be"),
+                             (dict(updated="2026-W01-1"), "updated must be"),
+                             (dict(schema_version=999), "schema_version")):
+            with self.subTest(needle=needle):
+                for old in (self.store / "notes").glob("*.md"):
+                    old.unlink()
+                self.write_note("2026-09-01-a", **meta)
+                msgs = [m for lvl, _, m in fn.lint(self.ctx(), fn.load_notes(self.ctx())) if lvl == "error"]
+                self.assertTrue(any(needle in m for m in msgs), msgs)
+
+    def test_search_short_terms_are_whole_words(self):
+        self.write_note("2026-09-01-cpp", title="C++ compiler crashes", summary="x")
+        self.write_note("2026-09-02-py", title="Python compiler", summary="y")
+        self.write_note("2026-09-03-go", title="Go and R in one gateway", summary="z")
+        notes = fn.load_notes(fn.Context(type("A", (), {})()))
+        ids = lambda q: [n.id for _, kind, n in fn.search(notes, q)[0] if kind == "note"]  # noqa: E731
+        self.assertEqual(ids(["C++", "compiler"]), ["2026-09-01-cpp"])
+        self.assertEqual(ids(["r"]), ["2026-09-03-go"])
+        self.assertEqual(ids(["go"]), ["2026-09-03-go"])
+
+    def test_root_json(self):
+        code, out, _ = self.run_cli("root", "--json")
+        self.assertEqual(json.loads(out)["root"], str(self.store))
+
+
 if __name__ == "__main__":
     unittest.main()

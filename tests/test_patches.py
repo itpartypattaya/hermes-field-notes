@@ -215,7 +215,8 @@ class DoctorTest(HomeCase):
         self.assertIn("all live patches have their signs in place", out)
         state = json.loads((self.home / "cache" / "field-notes-state.json").read_text(encoding="utf-8"))
         self.assertEqual(state["last_check"]["patches"], {"2026-01-01-a": "OK"})
-        self.assertFalse((self.home / "cache" / "field-notes.lock").exists())
+        with fn.Lock(self.home / "cache" / "field-notes.lock", wait=0):   # released, not just closed
+            pass
 
     def test_corrupt_state_recovers(self):
         self.make_core(files={"a.py": "MARK"})
