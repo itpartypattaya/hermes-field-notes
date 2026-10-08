@@ -74,6 +74,18 @@ class CheckTest(HomeCase):
         self.write_patch("2026-01-01-a", None, None, editions=editions)
         self.assertEqual(self.status("2026-01-01-a")["status"], "OK")
 
+    def test_tags_of_the_0216_release_pipeline(self):
+        # 0.21.6 tags: v0.21.6 and rc.N-v0.21.6, abandoned-rc.N-v…, v0.21.5+canary.…
+        self.make_core(version="0.0.0", files={"a.py": "x"}, git=True)
+        for tag, want in (("abandoned-rc.33-v0.21.5", "0.21.5"), ("v0.21.5+canary.20261008T070449Z", "0.21.5"),
+                          ("rc.4-v0.21.6", "0.21.6"), ("v0.21.6", "0.21.6")):
+            with self.subTest(tag=tag):
+                self.git("-c", "user.email=t@example.com", "-c", "user.name=t",
+                         "commit", "-q", "--allow-empty", "-m", tag)
+                self.git("tag", tag)
+                self.assertEqual(fn.core_info(self.ctx()).get("version_from_tag"), want)
+        self.assertEqual(fn._release_version({"name": "Hermes Agent v0.21.6", "tag_name": "v0.21.6"}), "0.21.6")
+
     def test_path_escape_rejected(self):
         self.make_core(files={"a.py": "x"})
         outside = self.tmp / "secret.py"

@@ -1,10 +1,10 @@
 ---
 name: hermes-field-notes
 description: "Record Hermes bugs and pitfalls; check local core patches."
-version: 1.2.2
+version: 1.2.3
 author: "Anton Vaskov (itpartypattaya), https://t.me/passone"
 license: MIT
-compatibility: Hermes Agent >= 0.21 (written against 0.21.5)
+compatibility: Hermes Agent >= 0.21 (checked against 0.21.6)
 allowed-tools: terminal read_file write_file patch
 tags: [debugging, pitfalls, patches, hermes-update, knowledge, dashboard]
 ---

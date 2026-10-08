@@ -75,7 +75,7 @@ python3 ~/.hermes/skills/hermes-field-notes/scripts/install.py --check
 ~/.hermes/hermes-agent/venv/bin/python ~/.hermes/skills/hermes-field-notes/scripts/install_cron.py
 ```
 
-Нужно: Hermes Agent ≥ 0.21 (писалось под 0.21.5), Python 3.11+, только стандартная библиотека.
+Нужно: Hermes Agent ≥ 0.21 (проверено на 0.21.6), Python 3.11+, только стандартная библиотека.
 Для проверки патчей ядро должно лежать каталогом; для `drift` — ещё и быть git-чекаутом.
 
 ## Как пользоваться

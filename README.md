@@ -74,7 +74,7 @@ Optional hourly watch and dashboard — edit `~/.hermes/field-notes.json` first
 ~/.hermes/hermes-agent/venv/bin/python ~/.hermes/skills/hermes-field-notes/scripts/install_cron.py
 ```
 
-Requirements: Hermes Agent ≥ 0.21 (written against 0.21.5), Python 3.11+, standard library only.
+Requirements: Hermes Agent ≥ 0.21 (checked against 0.21.6), Python 3.11+, standard library only.
 Patch checks need the core as a directory; `drift` additionally needs it to be a git checkout.
 
 ## Using it

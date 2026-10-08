@@ -4,8 +4,9 @@
 
 1. `python3 "${HERMES_SKILL_DIR}/scripts/fieldnotes.py" doctor` — core version and SHA, patch
    statuses, core changes outside the registry, notes to re-verify, one verdict line.
-2. `MISSING` → show the user the re-apply command from the note; run it only after their "yes";
-   restart the gateway; `patches check` again.
+2. `MISSING` → first `git -C <hermes-agent> stash list`: the update may have parked the edit there
+   instead of deleting it (`known-pitfalls.md`). Then show the user the re-apply command from the
+   note; run it only after their "yes"; restart the gateway; `patches check` again.
 3. `UPSTREAMED` → read the evidence; when the user agrees, set `status: fixed-upstream` in the note.
 4. `UNKNOWN` → read the evidence (`patches check -v`): `partial` and `conflict` need a human look at
    the file; `target_gone` means the core moved code — update the checks file.

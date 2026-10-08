@@ -3,7 +3,9 @@
 Local core patches that one production Hermes install has carried through several updates,
 written down so another agent can reproduce them. Each recipe says what breaks, where in the core,
 what the edit does, how to check it with a `checks.json`, how to tell that upstream fixed it, and
-where upstream stands. Verified against Hermes 0.21.5 (rc.33, `8d30c4e`) on 2026-10-07.
+where upstream stands. Verified against Hermes 0.21.5 (rc.33, `8d30c4e`) on 2026-10-07 and
+re-checked against 0.21.6 (`818c13b`) on 2026-10-08: the first four bugfixes are still needed,
+the fifth is fixed upstream in 0.21.6.
 
 How to use a recipe:
 
@@ -58,7 +60,7 @@ numbers; read the current code before editing.
 - **Symptom:** the chat receives a message that looks empty; logs show text of length > 0.
 - **Where:** `send()` in `plugins/platforms/telegram/adapter.py` (live adapter: streaming final,
   cron through the gateway, plugins) and the direct Telegram sender used by the `send_message` tool
-  and the standalone cron fallback (`tools/send_message_senders.py` on 0.21.5).
+  and the standalone cron fallback (`tools/send_message_senders.py` on 0.21.5 and 0.21.6).
 - **Edit:** the guard uses `not text.strip()`, and `strip()` keeps zero-width and other invisible
   characters (U+200B, U+200C, U+200D, U+FEFF, U+2060, U+2063, U+00AD, U+180E). Strip whitespace and
   those characters before the emptiness check, skip the send, log a warning with a `repr` preview.
@@ -83,8 +85,13 @@ numbers; read the current code before editing.
 - **Upstream signs:** `_session_key_for_source` applies the group-observe normalisation itself.
 - **Upstream:** issue [#65085](https://github.com/NousResearch/hermes-agent/issues/65085) (open).
 
-### Reasoning is delivered to the chat as the answer (0.21.3+)
-- **Affects:** 0.21.3 and later, any provider that returns reasoning separately (Codex summaries,
+### Reasoning is delivered to the chat as the answer (0.21.3–0.21.5; fixed in 0.21.6)
+- **Fixed upstream in 0.21.6** (`71c1669404`, `2f0efe8f66`): the promotion now needs a trusted route
+  (`agent/reasoning_promotion.py` `answer_in_reasoning_capability()` — an `answer_in_reasoning`
+  opt-in in `custom_providers` or the local Nemotron-3.5-Lightning route); OpenRouter and
+  non-chat-completions transports such as Codex Responses never promote. On 0.21.6+ do not apply
+  this patch; retire an existing one (set `status: fixed-upstream` in its note).
+- **Affects:** 0.21.3 to 0.21.5, any provider that returns reasoning separately (Codex summaries,
   Gemini) and sometimes stops with empty content.
 - **Symptom:** the user receives the model's internal reasoning instead of a reply, and it is
   stored in the history as the assistant's answer.
@@ -94,11 +101,13 @@ numbers; read the current code before editing.
   restores upstream behaviour), keep the log line, and let the turn fall through to the normal
   empty-response recovery (prefill retries, then fallback).
 - **Checks:** `when: {"min_version": "0.21.3"}`; your marker in `agent/turn_final_response.py`.
-  Older cores have no such block: the edition does not apply there (`N/A`).
-- **Upstream signs:** the branch no longer assigns the reasoning text to the final response.
+  Older cores have no such block: the edition does not apply there (`N/A`). Put an edition for
+  0.21.6 first, with the same target and the upstream sign below, so an updated core reports
+  `UPSTREAMED` (or `conflict` if the old patch was re-applied on top) instead of `MISSING`.
+- **Upstream signs:** `answer_in_reasoning_capability(agent)` in `agent/turn_final_response.py`.
 - **Upstream:** issue [#111761](https://github.com/NousResearch/hermes-agent/issues/111761) closed
   with a partial fix (reasoning no longer written into `content`); the promotion itself remained in
-  0.21.5.
+  0.21.5 and is gated by route since 0.21.6.
 
 ## Customization ideas
 

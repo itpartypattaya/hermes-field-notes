@@ -1,6 +1,9 @@
 # Writing a patch that survives `hermes update`
 
-`hermes update` replaces the core tree: every local edit is gone unless something re-applies it.
+`hermes update` moves the core tree to new code. It stashes uncommitted local edits and tries to
+re-apply them, but a conflict, a failed syntax or import check or a declined prompt leaves them
+parked in `git stash` (`known-pitfalls.md`), so treat every local edit as gone unless your own
+script re-applies it.
 Ready recipes for known problems: `patch-recipes.md`. Keep each edit as a small, idempotent script outside the core (for example in a folder you version
 yourself), and register it with a patch note so the skill can tell when it is missing.
 
