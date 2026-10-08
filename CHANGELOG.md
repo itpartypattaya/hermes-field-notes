@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.2.3 — 2026-10-08
+
+Checked against Hermes 0.21.6 (`818c13b`):
+- the plugin installs with `hermes plugins install`, and `plugins validate` and the skills scanner both say safe;
+- the plugin skill loads;
+- `install.py`, `doctor`, `lint`, `drift` and `install_cron.py` work;
+- the no_agent job runs through the 0.21.6 scheduler, on both the silent and the alert path.
+
+No code change was needed; the content was updated.
+
+- **Known pitfalls** re-verified against 0.21.6 (42 entries).
+  - Moved to "fixed upstream":
+    - reasoning delivered as the answer — promotion is now gated by route;
+    - a temporary `HERMES_HOME` rewriting the launcher;
+    - duplicate YAML keys.
+  - Updated:
+    - plugin skills reach the index with their full description;
+    - `session_reset` notice;
+    - cron `last_failure`;
+    - `hermes update --channel stable`;
+    - gateways paused before the checkout;
+    - background processes on gateway shutdown.
+  - New: `hermes update` parks local core edits in `git stash` when it cannot restore them.
+- **Patch recipes:** the reasoning recipe is marked fixed in 0.21.6, with the upstream sign for its
+  checks. The other four bugfixes are still needed.
+- **After an update:** for `MISSING`, look at `git stash list` first.
+- Tests cover the 0.21.6 tag scheme (`v0.21.6`, `rc.N-v…`, `abandoned-rc.N-v…`, `+canary`): 93 → 94.
+
 ## 1.2.2 — 2026-10-09
 
 Fixes ported from [field-notes 2.0.1](https://github.com/itpartypattaya/field-notes/releases/tag/v2.0.1),
