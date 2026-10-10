@@ -36,7 +36,7 @@ import urllib.error  # noqa: E402
 import urllib.request  # noqa: E402
 from pathlib import Path  # noqa: E402
 
-VERSION = "1.2.3"
+VERSION = "1.2.4"
 SCHEMA_VERSION = 1
 SKILL_DIR = Path(__file__).resolve().parents[1]
 ASSETS = SKILL_DIR / "assets"
@@ -2331,13 +2331,21 @@ def _cmd_migrate(ctx, args):
 def build_parser():
     ap = argparse.ArgumentParser(prog="fieldnotes.py", description=__doc__.split("\n\n")[0])
     ap.add_argument("--version", action="version", version=f"hermes-field-notes {VERSION}")
+
+    def add_common(parser, **extra):
+        parser.add_argument("--hermes-home", help="Hermes home (default: $HERMES_HOME or ~/.hermes)", **extra)
+        parser.add_argument("--config", help="config file (default: <hermes-home>/field-notes.json)", **extra)
+        parser.add_argument("--root", help="notes store (default: <hermes-home>/field-notes)", **extra)
+        parser.add_argument("--hermes-root", help="hermes-agent checkout (default: <hermes-home>/hermes-agent)",
+                            **extra)
+        parser.add_argument("--read-only", action="store_true", help="write nothing, use no network", **extra)
+        parser.add_argument("--json", action="store_true", help="machine-readable output", **extra)
+
+    # The common options work before and after the subcommand. The top parser holds the defaults; the
+    # subcommand copies use SUPPRESS so their defaults do not overwrite a flag given before the subcommand.
+    add_common(ap)
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--hermes-home", help="Hermes home (default: $HERMES_HOME or ~/.hermes)")
-    common.add_argument("--config", help="config file (default: <hermes-home>/field-notes.json)")
-    common.add_argument("--root", help="notes store (default: <hermes-home>/field-notes)")
-    common.add_argument("--hermes-root", help="hermes-agent checkout (default: <hermes-home>/hermes-agent)")
-    common.add_argument("--read-only", action="store_true", help="write nothing, use no network")
-    common.add_argument("--json", action="store_true", help="machine-readable output")
+    add_common(common, default=argparse.SUPPRESS)
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("root", parents=[common], help="print the store path").set_defaults(fn=cmd_root)
     sub.add_parser("init", parents=[common], help="create an empty store").set_defaults(fn=cmd_init)

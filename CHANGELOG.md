@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.4 — 2026-10-11
+
+- **Common options before the command.** `fieldnotes.py --read-only doctor` failed with
+  "unrecognized arguments: --read-only" (exit 2): `--read-only`, `--json`, `--root`, `--hermes-home`,
+  `--hermes-root` and `--config` were accepted only after the subcommand, while agents naturally put
+  them first. Both positions work now. The subcommand copies use `argparse.SUPPRESS`, so a flag given
+  first is not reset by the subcommand's default. `tick` still refuses `--read-only` in either position.
+  Found by the agent itself on Hermes 0.21.6.
+- Tests: 94 → 95.
+
 ## 1.2.3 — 2026-10-08
 
 Checked against Hermes 0.21.6 (`818c13b`):

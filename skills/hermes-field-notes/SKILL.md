@@ -1,7 +1,7 @@
 ---
 name: hermes-field-notes
 description: "Record Hermes bugs and pitfalls; check local core patches."
-version: 1.2.3
+version: 1.2.4
 author: "Anton Vaskov (itpartypattaya), https://t.me/passone"
 license: MIT
 compatibility: Hermes Agent >= 0.21 (checked against 0.21.6)
@@ -57,7 +57,7 @@ scripts — it records, verifies and reminds.
 | `migrate --from <dir> [--apply]` | import older field-notes formats (dry run by default) |
 
 Add `--read-only` to guarantee no writes and no network (`tick`, the cron entry point, refuses it);
-`--json` for machine output.
+`--json` for machine output. Both work before or after the command (`--read-only doctor` = `doctor --read-only`).
 
 ## Quick Reference
 

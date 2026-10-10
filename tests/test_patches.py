@@ -219,6 +219,30 @@ class DoctorTest(HomeCase):
             self.run_cli(*argv)
         self.assertEqual(before, self.files_snapshot())
 
+    def test_common_flags_before_the_subcommand(self):
+        # 1.2.3: `fieldnotes.py --read-only doctor` failed with "unrecognized arguments" (exit 2).
+        self.make_core(files={"a.py": "MARK"}, git=True)
+        self.write_patch("2026-01-01-a", "a.py", ["MARK"])
+        before = self.files_snapshot()
+        for argv in (["--read-only", "doctor"], ["--read-only", "search", "x"], ["--read-only", "patches", "check"]):
+            with self.subTest(argv=argv):
+                code, _, err = self.run_cli(*argv)
+                self.assertEqual(code, 0, err)
+        self.assertEqual(before, self.files_snapshot())
+        args = fn.build_parser().parse_args(["--read-only", "--json", "doctor"])
+        self.assertEqual((args.read_only, args.json), (True, True))          # not reset by the subcommand
+        args = fn.build_parser().parse_args(["doctor", "--read-only", "--json"])
+        self.assertEqual((args.read_only, args.json), (True, True))
+        args = fn.build_parser().parse_args(["doctor"])
+        self.assertEqual((args.read_only, args.json, args.root), (False, False, None))
+        code, out, _ = self.run_cli("--json", "patches", "check")
+        self.assertEqual(json.loads(out)["patches"][0]["status"], "OK")
+        for argv in (["--read-only", "tick"], ["tick", "--read-only"]):
+            with self.subTest(argv=argv):
+                code, _, err = self.run_cli(*argv)
+                self.assertNotEqual(code, 0)
+                self.assertIn("--read-only", err)
+
     def test_doctor_writes_state_and_text(self):
         self.make_core(files={"a.py": "MARK"}, git=True)
         self.write_patch("2026-01-01-a", "a.py", ["MARK"], patch_short="Patch A")

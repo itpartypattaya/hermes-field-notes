@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "hermes-field-notes",
-  "version": "1.2.3",
+  "version": "1.2.4",
   "description": "Field notes for a Hermes install: pitfalls with root cause, local core patches checked after every update, and a pinned Telegram dashboard.",
   "author": {
     "name": "Anton Vaskov",
