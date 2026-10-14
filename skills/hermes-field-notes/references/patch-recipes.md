@@ -4,8 +4,8 @@ Local core patches that one production Hermes install has carried through severa
 written down so another agent can reproduce them. Each recipe says what breaks, where in the core,
 what the edit does, how to check it with a `checks.json`, how to tell that upstream fixed it, and
 where upstream stands. Verified against Hermes 0.21.5 (rc.33, `8d30c4e`) on 2026-10-07 and
-re-checked against 0.21.6 (`818c13b`) on 2026-10-08: the first four bugfixes are still needed,
-the fifth is fixed upstream in 0.21.6.
+re-checked against 0.21.6 (`818c13b`) on 2026-10-08 and 0.22.0 (`e06df9c`) on 2026-10-14: the first four
+bugfixes are still needed (anchors unchanged), the fifth is fixed upstream since 0.21.6.
 
 How to use a recipe:
 

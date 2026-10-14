@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.2.5 — 2026-10-14
+
+Checked against Hermes 0.22.0 (`e06df9c`, Python 3.14):
+- `hermes plugins install`, `plugins validate` and the skills scanner all pass and report safe;
+- the plugin skill loads (`skill_view`, `skills_list`);
+- `install.py`, `doctor` (the new SemVer release tags are read correctly), `lint` and `drift` work, and `--read-only` is accepted in both positions;
+- the unit tests pass on 3.14;
+- the no_agent job runs through the 0.22.0 scheduler, on both the silent and the alert path.
+
+The catalog rules of 0.22.0 (rule 9, "no runtime overrides of Hermes core") do not touch this skill: its scripts only read the core. No code change was needed; the content was updated.
+
+- **Known pitfalls** re-verified against 0.22.0 (42 entries):
+  - Moved to "fixed upstream":
+    - `hermes update` following `main` — since 0.21.7 it follows tagged releases;
+    - the holographic fact store — it left core in 0.22.0 for a catalog plugin.
+  - Partly fixed: skills added mid-chat now reach existing conversations, but changed descriptions, persona and memory edits still do not.
+  - Updated:
+    - package-manager environment generations instead of `<hermes-agent>/venv`;
+    - cron re-runs after an unreachable model;
+    - new runtime keys in `jobs.json`;
+    - the `session_reset` startup notice;
+    - the autostash left after a killed update.
+- **Patch recipes:** anchors unchanged in 0.22.0; the four bugfixes are still needed (upstream issues open).
+- Version only, no code change; 95 tests.
+
 ## 1.2.4 — 2026-10-11
 
 - **Common options before the command.** `fieldnotes.py --read-only doctor` failed with
