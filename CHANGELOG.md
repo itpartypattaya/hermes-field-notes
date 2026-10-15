@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.2.6 — 2026-10-15
+
+Fixes from a full review of 1.2.5 in the Antigravity CLI. 10 of its 12 findings were confirmed against
+the code and fixed. One was not a bug: `core_returned` on a git checkout. Moving forward to a revision seen
+before is an update, and the tests pin that. The review also led to one more fix: the documented cron
+setup command used a stale interpreter.
+
+- **`doctor` and `patches check`:** a `MISSING` patch now wins over an `UNKNOWN` neighbour (exit 2, not 3).
+  The verdict line names every status that needs a look: `MISSING`, `UNKNOWN` and `UPSTREAMED`.
+  It no longer says "signs in place" when a patch looks fixed upstream or none applies (`N/A`).
+- **Multi-target patch:** one target is gone, another still carries the local edit, and the upstream
+  signs are present. This is now `UNKNOWN (conflict)`, not `UPSTREAMED`.
+- **Release check with a local commit:** GitHub does not know a commit that was never pushed, so it
+  answered 404, and the dashboard showed an error for 12 hours. The check now falls back to the version
+  number.
+- **`dashboard` without `--publish`** keeps the GitHub answer it fetched, so repeated views do not call
+  the API each time.
+- **Usage errors** exit with 1. Exit code 2 still means "a patch is MISSING".
+- **`fieldnotes-watch.py`:**
+  - it writes UTF-8 whatever the locale, so a latin-1 locale or a Windows pipe no longer crashes it on an emoji;
+  - each kind of failure is throttled apart, so an hourly timeout no longer hides a broken install for 24 hours.
+- **`install.py --check`** reads `.env` the way `fieldnotes.py` does: `export NAME=…`, spaces around `=`,
+  quotes.
+- **`install_cron.py`:**
+  - it re-runs itself with the interpreter Hermes runs on: the active package-manager environment from
+    `installs/<key>/facts.json`, else the legacy `<hermes-agent>/venv`. Since 0.22 the documented
+    `hermes-agent/venv/bin/python` can be a stale environment left behind. The docs now say `python3`;
+  - without `--deliver` and without a dashboard `chat_id`, alerts go to the Telegram home channel when
+    `TELEGRAM_HOME_CHANNEL` is set, not to `local`.
+- Tests: 95 → 109.
+
 ## 1.2.5 — 2026-10-14
 
 Checked against Hermes 0.22.0 (`e06df9c`, Python 3.14):

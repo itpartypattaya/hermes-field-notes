@@ -62,8 +62,9 @@ def _config(home):
         return {}
 
 
-def throttled_error(home, message):
-    """Print `message` unless the same kind of failure was reported within repeat_hours."""
+def throttled_error(home, kind, message):
+    """Print `message` unless the same kind of failure was reported within repeat_hours.
+    Kinds are throttled apart: an hourly timeout does not hide a broken install."""
     cfg = _config(home)
     try:
         repeat = float((cfg.get("alerts") or {}).get("repeat_hours") or 24)
@@ -72,14 +73,20 @@ def throttled_error(home, message):
     path = home / "cache" / "field-notes-watch.json"
     now = dt.datetime.now(dt.timezone.utc)
     try:
-        last = dt.datetime.fromisoformat(json.loads(path.read_text(encoding="utf-8")).get("error_at"))
-    except (OSError, ValueError, TypeError, AttributeError):
+        errors = json.loads(path.read_text(encoding="utf-8")).get("errors")
+        errors = errors if isinstance(errors, dict) else {}
+    except (OSError, ValueError, AttributeError):
+        errors = {}
+    try:
+        last = dt.datetime.fromisoformat(errors.get(kind))
+    except (ValueError, TypeError):
         last = None
     if last and (now - last).total_seconds() < repeat * 3600:
         return
+    errors[kind] = now.isoformat()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"error_at": now.isoformat()}), encoding="utf-8")
+        path.write_text(json.dumps({"errors": errors}), encoding="utf-8")
     except OSError:
         pass
     print(message)
@@ -93,10 +100,15 @@ def clear_error(home):
 
 
 def main():
+    for stream in (sys.stdout, sys.stderr):  # the lines carry emoji; a latin-1 locale or a Windows pipe would crash
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
     home = hermes_home()
     script = find_fieldnotes(home)
     if script is None:
-        throttled_error(home, f"⚠️ field-notes: skill {SKILL} not found under {home} — reinstall it")
+        throttled_error(home, "not_found", f"⚠️ field-notes: skill {SKILL} not found under {home} — reinstall it")
         return 0
     timeout = DEFAULT_TIMEOUT
     try:
@@ -108,15 +120,16 @@ def main():
                               capture_output=True, text=True, encoding="utf-8", errors="replace",
                               timeout=timeout)
     except subprocess.TimeoutExpired:
-        throttled_error(home, f"⚠️ field-notes: check took longer than {timeout} s and was stopped")
+        throttled_error(home, "timeout", f"⚠️ field-notes: check took longer than {timeout} s and was stopped")
         return 0
     except OSError as exc:
-        throttled_error(home, f"⚠️ field-notes: cannot run {script.name}: {exc}")
+        throttled_error(home, "cannot_run", f"⚠️ field-notes: cannot run {script.name}: {exc}")
         return 0
     if proc.returncode != 0:
         tail = (proc.stderr or proc.stdout or "").strip().splitlines()
-        throttled_error(home, f"⚠️ field-notes: check failed (exit {proc.returncode}): "
-                              f"{tail[-1][:200] if tail else 'no output'}")
+        throttled_error(home, f"exit_{proc.returncode}",
+                        f"⚠️ field-notes: check failed (exit {proc.returncode}): "
+                        f"{tail[-1][:200] if tail else 'no output'}")
         return 0
     clear_error(home)
     out = proc.stdout.strip()

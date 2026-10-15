@@ -12,7 +12,7 @@ Three independent parts that share one store of Markdown notes:
 The script never edits the Hermes core and never runs patch scripts. Standard
 library only, Python >= 3.11. Run `fieldnotes.py --help` for the commands.
 
-Exit codes: 0 fine · 1 usage or lint errors · 2 a patch is MISSING ·
+Exit codes: 0 fine · 1 usage or lint errors · 2 a patch is MISSING (wins over 3) ·
 3 a patch is UNKNOWN (the check could not decide) · 4 store or core not found.
 """
 
@@ -36,7 +36,7 @@ import urllib.error  # noqa: E402
 import urllib.request  # noqa: E402
 from pathlib import Path  # noqa: E402
 
-VERSION = "1.2.5"
+VERSION = "1.2.6"
 SCHEMA_VERSION = 1
 SKILL_DIR = Path(__file__).resolve().parents[1]
 ASSETS = SKILL_DIR / "assets"
@@ -853,7 +853,9 @@ def check_patch(note, core, root):
     if unreadable:
         result["reason"] = "unreadable"
     elif gone:
-        if upstream_ok:
+        if upstream_ok and (full or partial):
+            result["reason"] = "conflict"  # one target moved away, another still carries the local edit
+        elif upstream_ok:
             result["status"] = "UPSTREAMED"
         else:
             result["reason"] = "target_gone"
@@ -884,10 +886,11 @@ def check_patches(ctx, notes, core):
 
 
 def patches_exit(results):
-    if any(r["status"] == "UNKNOWN" for r in results):
-        return EXIT_UNKNOWN
+    """MISSING wins over UNKNOWN: a lost patch is a known fault, an undecided check is only a doubt."""
     if any(r["status"] == "MISSING" for r in results):
         return EXIT_MISSING
+    if any(r["status"] == "UNKNOWN" for r in results):
+        return EXIT_UNKNOWN
     return EXIT_OK
 
 
@@ -1142,19 +1145,29 @@ def fetch_upstream(ctx, core):
         info["latest"] = {"tag": latest.get("tag_name"), "version": _release_version(latest),
                           "date": str(latest.get("published_at") or "")[:10]}
     sha = core.get("identity") if core.get("identity_source") == "git" else None
-    if sha and latest:
-        cmp = GITHUB_GET(f"repos/{repo}/compare/{latest['tag_name']}...{sha}")
-        status = cmp.get("status")
+    cmp = _compare(repo, latest["tag_name"], sha) if sha and latest else None
+    if cmp is not None:
         info["relation"] = {"identical": "same", "ahead": "newer", "behind": "older",
-                            "diverged": "diverged"}.get(status)
+                            "diverged": "diverged"}.get(cmp.get("status"))
         info["behind_release"] = cmp.get("behind_by")
     elif latest and version_tuple(core.get("version")) and version_tuple(info["latest"]["version"]):
         mine, theirs = version_tuple(core["version"]), version_tuple(info["latest"]["version"])
         info["relation"] = "same" if mine == theirs else ("newer" if mine > theirs else "older")
-    if sha:
-        cmp = GITHUB_GET(f"repos/{repo}/compare/{sha}...{branch}")
+    cmp = _compare(repo, sha, branch) if sha and cmp is not None else None
+    if cmp is not None:
         info["behind_main"] = cmp.get("ahead_by")
     return info
+
+
+def _compare(repo, base, head):
+    """GitHub compare, or None when GitHub does not know a commit: a local commit on top of the
+    install was never pushed there (404), or the histories are unrelated (422)."""
+    try:
+        return GITHUB_GET(f"repos/{repo}/compare/{base}...{head}")
+    except urllib.error.HTTPError as exc:
+        if exc.code in (404, 422):
+            return None
+        raise
 
 
 def upstream_info(ctx, state, core, allow_network=True):
@@ -2155,13 +2168,31 @@ def cmd_doctor(ctx, args):
         print(f"\ndoctor: the patches look fine, but {lint_errors} note error(s) make the registry unreliable "
               "— run `fieldnotes.py lint`")
         return EXIT_ERR
-    verdict = {EXIT_OK: "all live patches have their signs in place",
-               EXIT_MISSING: "a patch is MISSING — re-apply it (with the owner's consent)",
-               EXIT_UNKNOWN: "a patch check is UNKNOWN — read its evidence (`patches check`)"}[code]
+    verdict = doctor_verdict(results)
     if drift.get("available") and drift.get("unregistered"):
         verdict += "; core files changed outside the registry"
     print(f"\ndoctor: {verdict}")
     return code
+
+
+def doctor_verdict(results):
+    """One line that names every status needing a look, worst first."""
+    n = {s: sum(1 for r in results if r["status"] == s) for s in ("MISSING", "UNKNOWN", "UPSTREAMED", "N/A", "OK")}
+    parts = []
+    if n["MISSING"]:
+        parts.append(f"{n['MISSING']} patch(es) MISSING — re-apply (with the owner's consent)")
+    if n["UNKNOWN"]:
+        parts.append(f"{n['UNKNOWN']} check(s) UNKNOWN — read the evidence (`patches check -v`)")
+    if n["UPSTREAMED"]:
+        parts.append(f"{n['UPSTREAMED']} patch(es) look fixed upstream — confirm and mark fixed-upstream")
+    if parts:
+        return "; ".join(parts)
+    if n["OK"]:
+        return "all live patches have their signs in place" + (
+            f" ({n['N/A']} not needed on this core version)" if n["N/A"] else "")
+    if n["N/A"]:
+        return "no live patch applies to this core version (N/A)"
+    return "no live patches to check"
 
 
 class _nolock:
@@ -2176,16 +2207,19 @@ def cmd_dashboard(ctx, args):
     require_store(ctx)
     if args.publish:
         ctx.require_writable("publish the dashboard")
-    with Lock(ctx.lock_path) if args.publish else _nolock():
+    with Lock(ctx.lock_path) if not ctx.read_only else _nolock():
         state = load_state(ctx)
         notes, core, results, drift, items = collect(ctx, state)
         if not ctx.read_only and args.publish:
             record_core(state, core, now_utc(), ctx.hermes_root)
+        cached = state.get("upstream")
         upstream, _ = upstream_info(ctx, state, core)
         report = build_report(ctx, state, notes, core, results, drift, items, upstream)
         fmt = "telegram" if args.publish else args.format
         text, digest = render(ctx, report, fmt)
         if not args.publish:
+            if state.get("upstream") != cached:
+                save_state(ctx, state)  # keep what was fetched: the next view need not ask GitHub again
             print(text)
             return EXIT_OK
         token, _, _ = dashboard_target(ctx)
@@ -2328,8 +2362,16 @@ def _cmd_migrate(ctx, args):
     return EXIT_ERR if stats["conflict"] else EXIT_OK
 
 
+class _Parser(argparse.ArgumentParser):
+    """argparse exits with 2 on a usage error, and 2 here means "a patch is MISSING"."""
+
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        self.exit(EXIT_ERR, f"{self.prog}: error: {message}\n")
+
+
 def build_parser():
-    ap = argparse.ArgumentParser(prog="fieldnotes.py", description=__doc__.split("\n\n")[0])
+    ap = _Parser(prog="fieldnotes.py", description=__doc__.split("\n\n")[0])
     ap.add_argument("--version", action="version", version=f"hermes-field-notes {VERSION}")
 
     def add_common(parser, **extra):

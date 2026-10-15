@@ -6,6 +6,7 @@ import json
 import os
 import re
 import unittest
+import urllib.error
 
 from _helpers import HomeCase, fn
 
@@ -396,6 +397,35 @@ class TickTest(HomeCase):
         self.assertIn("no bot token or chat id", out1)
         self.assertEqual(out2, "")
 
+
+class AgyUpstreamTest(UpstreamTest):
+    """1.2.6: a local commit GitHub does not know; the dashboard view keeps what it fetched."""
+
+    def test_unknown_local_commit_falls_back_to_the_version(self):
+        def fake(path, timeout=15):
+            self.calls.append(path)
+            if "releases" in path:
+                return self.releases
+            raise urllib.error.HTTPError(f"https://api.github.com/{path}", 404, "Not Found", None, None)
+        fn.GITHUB_GET = fake
+        ctx = self.ctx()
+        info, _ = fn.upstream_info(ctx, fn.load_state(ctx), fn.core_info(ctx))
+        self.assertIsNone(info["error"])                        # was "HTTPError: HTTP Error 404" for 12 h
+        self.assertEqual((info["latest"]["version"], info["relation"]), ("0.21.5", "same"))
+        self.assertIsNone(info["behind_main"])
+        self.assertEqual(sum("compare/" in c for c in self.calls), 1)   # no second compare for main
+
+    def test_dashboard_view_saves_the_fetched_answer(self):
+        self.run_cli("dashboard", "--format", "text")
+        n = len(self.calls)
+        self.assertGreater(n, 0)
+        self.run_cli("dashboard", "--format", "text")
+        self.assertEqual(len(self.calls), n)                    # cached, not asked again
+        before = sorted(p.name for p in (self.home / "cache").iterdir())
+        self.calls.clear()
+        self.run_cli("dashboard", "--format", "text", "--read-only")
+        self.assertEqual(self.calls, [])
+        self.assertEqual(before, sorted(p.name for p in (self.home / "cache").iterdir()))
 
 if __name__ == "__main__":
     unittest.main()

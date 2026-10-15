@@ -71,8 +71,8 @@ python3 ~/.hermes/skills/hermes-field-notes/scripts/install.py --check
 (`dashboard.enabled`, `chat_id`, `thread_id`, `language: "ru"`, `timezone`), затем:
 
 ```bash
-~/.hermes/hermes-agent/venv/bin/python ~/.hermes/skills/hermes-field-notes/scripts/install_cron.py --dry-run
-~/.hermes/hermes-agent/venv/bin/python ~/.hermes/skills/hermes-field-notes/scripts/install_cron.py
+python3 ~/.hermes/skills/hermes-field-notes/scripts/install_cron.py --dry-run
+python3 ~/.hermes/skills/hermes-field-notes/scripts/install_cron.py
 ```
 
 Нужно: Hermes Agent ≥ 0.21 (проверено на 0.22.0), Python 3.11+, только стандартная библиотека.

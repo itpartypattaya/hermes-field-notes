@@ -70,8 +70,8 @@ Optional hourly watch and dashboard — edit `~/.hermes/field-notes.json` first
 (`dashboard.enabled`, `chat_id`, `thread_id`, `language`, `timezone`), then:
 
 ```bash
-~/.hermes/hermes-agent/venv/bin/python ~/.hermes/skills/hermes-field-notes/scripts/install_cron.py --dry-run
-~/.hermes/hermes-agent/venv/bin/python ~/.hermes/skills/hermes-field-notes/scripts/install_cron.py
+python3 ~/.hermes/skills/hermes-field-notes/scripts/install_cron.py --dry-run
+python3 ~/.hermes/skills/hermes-field-notes/scripts/install_cron.py
 ```
 
 Requirements: Hermes Agent ≥ 0.21 (checked against 0.22.0), Python 3.11+, standard library only.

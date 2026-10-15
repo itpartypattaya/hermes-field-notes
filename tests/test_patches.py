@@ -110,11 +110,14 @@ class CheckTest(HomeCase):
         self.assertEqual(code, 2)
         self.write_patch("2026-01-03-unk", "nope.py", ["M"])
         code, out, _ = self.run_cli("patches", "check")
-        self.assertEqual(code, 3)
+        self.assertEqual(code, 2)                 # 1.2.6: MISSING is not hidden behind an UNKNOWN neighbour
         self.assertIn("file not found", out)
         code, out, _ = self.run_cli("patches", "check", "--json")
         data = json.loads(out)
         self.assertEqual(len(data["patches"]), 2)
+        self.write_patch("2026-01-02-miss", "a.py", ["M"], status="fixed-upstream")
+        code, _, _ = self.run_cli("patches", "check")
+        self.assertEqual(code, 3)
 
     def test_core_missing(self):
         self.write_patch("2026-01-01-a", "a.py", ["M"])
@@ -343,6 +346,47 @@ class ReviewFixesTest(HomeCase):
         code, out, _ = self.run_cli("tick")
         self.assertEqual(out, "")
         fn.upstream_info = orig
+
+
+class AgyReviewTest(HomeCase):
+    """1.2.6: findings of the Antigravity review of 1.2.5."""
+
+    def test_doctor_names_every_status_that_needs_a_look(self):
+        self.make_core(files={"a.py": "def upstream_fix(): pass\n", "b.py": ""})
+        up = [{"file": "a.py", "contains": ["def upstream_fix("]}]
+        self.write_patch("2026-01-01-up", "a.py", ["MYPATCH"], upstream_rules=up)
+        code, out, _ = self.run_cli("doctor", "--read-only")
+        self.assertEqual(code, 0)
+        self.assertIn("1 patch(es) look fixed upstream", out)
+        self.assertNotIn("signs in place", out)          # it said "all live patches have their signs in place"
+        self.write_patch("2026-01-02-miss", "b.py", ["M"])
+        self.write_patch("2026-01-03-unk", "gone.py", ["M"])
+        code, out, _ = self.run_cli("doctor", "--read-only")
+        self.assertEqual(code, 2)
+        verdict = out.strip().splitlines()[-1]
+        self.assertIn("1 patch(es) MISSING", verdict)
+        self.assertIn("1 check(s) UNKNOWN", verdict)
+
+    def test_doctor_verdict_for_na_only(self):
+        self.assertEqual(fn.doctor_verdict([{"status": "N/A"}]), "no live patch applies to this core version (N/A)")
+        self.assertIn("1 not needed", fn.doctor_verdict([{"status": "OK"}, {"status": "N/A"}]))
+
+    def test_gone_target_next_to_a_patched_one_is_a_conflict(self):
+        self.make_core(files={"a.py": "MARK\ndef upstream_fix(): pass\n"})
+        up = [{"file": "a.py", "contains": ["def upstream_fix("]}]
+        self.write_patch("2026-01-01-a", None, None, editions=[{"targets": [
+            {"file": "a.py", "contains": ["MARK"]}, {"file": "b.py", "contains": ["MARK"]}], "upstream": up}])
+        ctx = self.ctx()
+        r = fn.check_patches(ctx, fn.load_notes(ctx), fn.core_info(ctx))[0]
+        self.assertEqual((r["status"], r["reason"]), ("UNKNOWN", "conflict"))   # was UPSTREAMED
+
+    def test_usage_error_is_not_exit_2(self):
+        with self.assertRaises(SystemExit) as cm:
+            self.run_cli("--no-such-flag", "doctor")
+        self.assertEqual(cm.exception.code, 1)                  # 2 means "a patch is MISSING"
+        with self.assertRaises(SystemExit) as cm:
+            self.run_cli()
+        self.assertEqual(cm.exception.code, 1)
 
 if __name__ == "__main__":
     unittest.main()

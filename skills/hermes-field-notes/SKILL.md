@@ -1,7 +1,7 @@
 ---
 name: hermes-field-notes
 description: "Record Hermes bugs and pitfalls; check local core patches."
-version: 1.2.5
+version: 1.2.6
 author: "Anton Vaskov (itpartypattaya), https://t.me/passone"
 license: MIT
 compatibility: Hermes Agent >= 0.21 (checked against 0.22.0)
@@ -37,7 +37,7 @@ scripts — it records, verifies and reminds.
 - First run: `python3 "${HERMES_SKILL_DIR}/scripts/install.py"` — creates the store
   (`$HERMES_HOME/field-notes/`), the config `$HERMES_HOME/field-notes.json`, and copies the cron
   script. `--check` verifies an existing setup and changes nothing.
-- Optional hourly watch + dashboard: `scripts/install_cron.py` (run it with Hermes' own Python, see
+- Optional hourly watch + dashboard: `scripts/install_cron.py` (it re-runs itself with Hermes' own Python, see
   `references/after-update.md`). The dashboard uses the agent's own Telegram bot.
 
 ## How to Run
@@ -69,7 +69,7 @@ Add `--read-only` to guarantee no writes and no network (`tick`, the cron entry 
 | `N/A` | no edition matches this core version | nothing |
 | `UNKNOWN` (`partial`, `conflict`, `target_gone`, `version_unknown`, `bad_checks`, `unreadable`) | the check could not decide | read the evidence, fix the checks or ask |
 
-Exit codes: 0 fine · 1 errors · 2 a patch is MISSING · 3 a patch is UNKNOWN · 4 store or core not found.
+Exit codes: 0 fine · 1 errors (usage too) · 2 a patch is MISSING (wins over UNKNOWN) · 3 a patch is UNKNOWN · 4 store or core not found.
 
 ## Procedure
 

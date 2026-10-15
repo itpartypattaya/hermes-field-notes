@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import subprocess
 import sys
 import unittest
+from pathlib import Path
 
-from _helpers import SCRIPTS, HomeCase
+from _helpers import SCRIPTS, HomeCase, load
 
 FAKE_CRON = '''
 import json, pathlib
@@ -128,6 +131,83 @@ class WatchTest(HomeCase):
         proc = self.run_watch()
         self.assertEqual(proc.stdout.strip(), "found me")
 
+
+class AgyInstallTest(HomeCase):
+    """1.2.6: .env syntax, home channel delivery, Hermes' interpreter, watch encoding and throttling."""
+
+    run_py = InstallTest.run_py
+    run_watch = WatchTest.run_watch
+
+    def test_check_reads_export_and_spaces_in_env(self):
+        self.run_py(SCRIPTS / "install.py")
+        (self.home / "field-notes.json").write_text('{"dashboard": {"enabled": true}}', encoding="utf-8")
+        (self.home / ".env").write_text('export TELEGRAM_BOT_TOKEN = "123:abc"\nTELEGRAM_HOME_CHANNEL= -1001  # main\n',
+                                        encoding="utf-8")
+        proc = self.run_py(SCRIPTS / "install.py", "--check")
+        self.assertIn("bot token and chat are configured", proc.stdout)
+        (self.home / ".env").write_text("TELEGRAM_BOT_TOKEN=123:abc\nTELEGRAM_HOME_CHANNEL=\n",
+                                        encoding="utf-8")
+        proc = self.run_py(SCRIPTS / "install.py", "--check")
+        self.assertIn("no chat_id", proc.stdout)
+
+    def test_cron_delivers_to_the_home_channel_without_chat_id(self):
+        self.make_core()
+        self.run_py(SCRIPTS / "install.py")
+        proc = self.run_py(SCRIPTS / "install_cron.py", "--dry-run")
+        self.assertEqual(json.loads(proc.stdout)["deliver"], "local")
+        (self.home / ".env").write_text("export TELEGRAM_HOME_CHANNEL=-1001\n", encoding="utf-8")
+        proc = self.run_py(SCRIPTS / "install_cron.py", "--dry-run")
+        self.assertEqual(json.loads(proc.stdout)["deliver"], "telegram")
+
+    def test_finds_the_hermes_interpreter(self):
+        ic = load("install_cron", "install_cron.py")
+        self.assertIsNone(ic.hermes_python(self.home))
+        legacy = self.home / "hermes-agent" / "venv" / "Scripts"
+        legacy.mkdir(parents=True)
+        (legacy / "python.exe").write_bytes(b"")
+        self.assertEqual(ic.hermes_python(self.home)[1], legacy / "python.exe")
+        env = self.tmp / "installs-env" / "venv"
+        (env / "bin").mkdir(parents=True)
+        (env / "bin" / "python3").write_bytes(b"")
+        facts = self.home / "installs" / "abc" / "facts.json"
+        facts.parent.mkdir(parents=True)
+        facts.write_text(json.dumps({"packages": {"venv": {"environment": str(env)}}}), encoding="utf-8")
+        self.assertEqual(ic.hermes_python(self.home), (env, env / "bin" / "python3"))   # managed env first
+        runs = []
+
+        def run(argv, env=None):
+            runs.append((argv, env.get(ic.REEXEC)))
+            return subprocess.CompletedProcess(argv, 7)
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(ic.ensure_hermes_python(["--dry-run"], self.home, run), 7)
+        self.assertEqual(runs[0][0][0], str(env / "bin" / "python3"))
+        self.assertEqual((runs[0][0][-1], runs[0][1]), ("--dry-run", "1"))
+        os.environ[ic.REEXEC] = "1"
+        try:
+            self.assertIsNone(ic.ensure_hermes_python([], self.home, run))       # no loop
+        finally:
+            os.environ.pop(ic.REEXEC)
+        prefix = Path(sys.prefix)
+        if (prefix / "bin" / "python3").is_file() or (prefix / "Scripts" / "python.exe").is_file():
+            facts.write_text(json.dumps({"packages": {"venv": {"environment": str(prefix)}}}), encoding="utf-8")
+            self.assertIsNone(ic.ensure_hermes_python([], self.home, run))       # already on it
+
+    def test_watch_survives_a_non_utf8_locale(self):
+        broken = self.tmp / "broken.py"
+        broken.write_text("import sys; sys.exit(5)\n", encoding="utf-8")
+        env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", PYTHONIOENCODING="latin-1",
+                   FIELDNOTES_SCRIPT=str(broken))
+        proc = subprocess.run([sys.executable, str(SCRIPTS / "fieldnotes-watch.py")], capture_output=True, env=env,
+                              timeout=120)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("⚠️ field-notes: check failed", proc.stdout.decode("utf-8"))
+
+    def test_watch_throttles_each_kind_apart(self):
+        broken = self.tmp / "broken.py"
+        broken.write_text("import sys; sys.exit(5)\n", encoding="utf-8")
+        self.assertIn("exit 5", self.run_watch({"FIELDNOTES_SCRIPT": str(broken)}).stdout)
+        self.assertEqual(self.run_watch({"FIELDNOTES_SCRIPT": str(broken)}).stdout, "")
+        self.assertIn("not found", self.run_watch({"FIELDNOTES_SCRIPT": ""}).stdout)   # was hidden for 24 h
 
 if __name__ == "__main__":
     unittest.main()

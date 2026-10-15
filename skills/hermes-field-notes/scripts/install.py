@@ -20,6 +20,7 @@ import argparse  # noqa: E402
 import filecmp  # noqa: E402
 import json  # noqa: E402
 import os  # noqa: E402
+import re  # noqa: E402
 import shutil  # noqa: E402
 import subprocess  # noqa: E402
 from pathlib import Path  # noqa: E402
@@ -119,12 +120,23 @@ def check(home, rep):
 
 
 def _env_file_has(home, name):
+    """NAME has a non-empty value in $HERMES_HOME/.env — read the way fieldnotes.py reads it
+    (`export NAME=…`, spaces around `=`, quotes)."""
     try:
-        for line in (home / ".env").read_text(encoding="utf-8-sig").splitlines():
-            if line.strip().startswith(f"{name}=") and line.split("=", 1)[1].strip():
-                return True
+        lines = (home / ".env").read_text(encoding="utf-8-sig").splitlines()
     except OSError:
-        pass
+        return False
+    for line in lines:
+        m = re.match(r"\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$", line)
+        if not m or m.group(1) != name:
+            continue
+        raw = m.group(2).strip()
+        if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "\"'":
+            raw = raw[1:-1]
+        else:
+            raw = re.sub(r"\s+#.*$", "", raw)
+        if raw.strip():
+            return True
     return False
 
 

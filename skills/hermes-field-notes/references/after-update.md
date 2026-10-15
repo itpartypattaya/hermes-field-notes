@@ -18,10 +18,15 @@
 
 ```bash
 python3 "${HERMES_SKILL_DIR}/scripts/install.py"     # copies fieldnotes-watch.py to $HERMES_HOME/scripts
-"$HERMES_HOME/hermes-agent/venv/bin/python" "${HERMES_SKILL_DIR}/scripts/install_cron.py" --dry-run
-"$HERMES_HOME/hermes-agent/venv/bin/python" "${HERMES_SKILL_DIR}/scripts/install_cron.py" \
+python3 "${HERMES_SKILL_DIR}/scripts/install_cron.py" --dry-run
+python3 "${HERMES_SKILL_DIR}/scripts/install_cron.py" \
     --deliver telegram:<chat_id>:<thread_id>
 ```
+
+`install_cron.py` imports Hermes' cron API, so it re-runs itself with the interpreter Hermes runs
+on: the package manager's active environment (`$HERMES_HOME/installs/<key>/facts.json`), else the
+legacy `<hermes-agent>/venv`. Without `--deliver`, alerts go to the dashboard chat, else to the
+Telegram home channel (`TELEGRAM_HOME_CHANNEL`), else `local`, where nobody reads them.
 
 The job is `no_agent`: the scheduler runs the script and delivers its stdout as is; empty stdout is
 a silent run. No model is called. The script prints a line only when something changed:
