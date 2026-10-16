@@ -146,6 +146,9 @@ false green. Details: [`note-format.md`](skills/hermes-field-notes/references/no
   the latest release (`upstream.check: false` turns it off).
 - Writes: the notes store, `$HERMES_HOME/cache/field-notes-state.json`, the cron script copy in
   `$HERMES_HOME/scripts/`, and the cron job if you run `install_cron.py`. The core is only read.
+  Without a dashboard chat, `install_cron.py` sends the job's alerts to the Telegram home channel
+  when `TELEGRAM_HOME_CHANNEL` is set (read from the environment or `$HERMES_HOME/.env`), else to
+  `local`, where nobody reads them.
 
 ## Contributing a pitfall
 
