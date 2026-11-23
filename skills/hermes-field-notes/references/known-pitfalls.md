@@ -100,7 +100,7 @@ file and function where the mechanism lives.
 ### A reply made only of invisible characters is sent as an empty-looking Telegram message
 - **Affects:** Telegram delivery, all current versions.
 - **Symptom:** blank message bubbles from the bot.
-- **Mechanism:** `plugins/platforms/telegram/adapter.py` `send()` and `tools/send_message_senders.py` skip only `.strip()`-empty text; `str.strip()` keeps U+200B/200C/200D/2060/FEFF/00AD.
+- **Mechanism:** `plugins/platforms/telegram/adapter.py` `send()` and `gateway/outbound/senders.py` (`tools/send_message_senders.py` before 0.23.2) skip only `.strip()`-empty text; `str.strip()` keeps U+200B/200C/200D/2060/FEFF/00AD.
 - **Workaround:** strip zero-width characters before the emptiness check in a `transform_llm_output` hook or local patch; log a `repr()` preview to find the source.
 - **Verified:** 0.22.0 (e06df9c), 2026-10-14
 - **Upstream:** https://github.com/NousResearch/hermes-agent/issues/60848
@@ -142,7 +142,7 @@ file and function where the mechanism lives.
 ### Cron `script:` paths must resolve inside `$HERMES_HOME/scripts/`, symlinks included
 - **Affects:** pre-run and no-agent scripts shipped inside a skill or plugin folder.
 - **Symptom:** `Blocked: script path resolves outside the scripts directory (…)`.
-- **Mechanism:** `cron/scheduler_script.py` resolves the path (following symlinks) and requires it to stay under `$HERMES_HOME/scripts`; `tools/cronjob_job_args.py` enforces a relative path at creation.
+- **Mechanism:** `cron/scheduler_script.py` resolves the path (following symlinks) and requires it to stay under `$HERMES_HOME/scripts`; `cron/job_args.py` (`tools/cronjob_job_args.py` before 0.23.2) enforces a relative path at creation.
 - **Workaround:** copy the script into `$HERMES_HOME/scripts/` and keep a test that the copy matches the source in the skill.
 - **Verified:** 0.22.0 (e06df9c), 2026-10-14
 - **Upstream:** not reported (by design)

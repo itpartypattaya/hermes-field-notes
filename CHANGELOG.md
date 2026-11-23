@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.3.0 — 2026-11-24
+
+Checked against Hermes v0.23.3: the scripts, `patches check`, `drift`, `doctor`, `lint` and the plugin install
+scan (moved to `hermes_cli/plugins_install_scan.py`, same `plugin-guard-v15`) work unchanged. The check found one
+real trap: a core without `.git`.
+
+- **A core without `.git`** (Docker, Nix, the desktop app, a `git archive` copy) says `0.0.0` in
+  `pyproject.toml`. The skill then picked a patch's edition without bounds — the fallback for older
+  releases — and checked the wrong files: on 0.23.3 two real patches showed a false `MISSING`.
+  - The version and commit now come from `install-stamp.json`, which Hermes itself reads in that case.
+    A placeholder stamp (all-zero commit), a broken or empty one is ignored.
+  - With no version at all, a bounded edition first means `UNKNOWN (version_unknown)`, not a blind pick.
+    An edition without bounds still wins when it comes first.
+  - New common option `--core-version X.Y.Z` names the release for a bare copy.
+  - The release check compares the stamp's commit with GitHub, and no longer calls a `0.0.0` core "older".
+- **Pitfalls and recipes:** two core paths moved in 0.23.2 (`tools/cronjob_job_args.py` →
+  `cron/job_args.py`, `tools/send_message_senders.py` → `gateway/outbound/senders.py`). The pitfalls
+  themselves are still verified against 0.22.0.
+
 ## 1.2.6 — 2026-10-15
 
 Fixes from a full review of 1.2.5 in the Antigravity CLI. 10 of its 12 findings were confirmed against

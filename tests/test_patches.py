@@ -126,6 +126,85 @@ class CheckTest(HomeCase):
         self.assertIn("core not found", err)
 
 
+STAMP_COMMIT = "caafe5389ae585ef77387a962aee05b1bcf17029"
+# The newest layout carries a bound; the fallback for older releases has none (a real patch №4 of 0.23.3).
+LAYOUTS = [{"when": {"min_version": "0.22.3"}, "targets": [{"file": "gw/persist.py", "contains": ["MYPATCH"]}]},
+           {"targets": [{"file": "gw/turn.py", "contains": ["MYPATCH"]}]}]
+
+
+def stamp(**fields):
+    """install-stamp.json as scripts/write_install_stamp.py of Hermes 0.23.3 writes it."""
+    data = {"schemaVersion": 1, "commit": STAMP_COMMIT, "commitDate": 1795134878, "branch": None,
+            "builtAt": "2026-11-20T00:40:02+00:00", "dirty": False, "source": "ci", "distribution": "docker",
+            "updateMechanism": "docker", "baseVersion": "0.23.3", "displayVersion": "0.23.3", "distance": 0,
+            "payload": "full", "tag": "v0.23.3"}
+    data.update(fields)
+    return json.dumps(data, indent=2)
+
+
+class CoreVersionWithoutGitTest(HomeCase):
+    """1.3.0: a core without .git (Docker, Nix, desktop app, a `git archive` copy) says 0.0.0 in pyproject."""
+
+    status = CheckTest.status
+
+    def patched_archive(self, **stamp_fields):
+        files = {"gw/persist.py": "save()  # MYPATCH\n", "gw/turn.py": "turn()\n"}
+        if stamp_fields.get("write", True):
+            stamp_fields.pop("write", None)
+            files["install-stamp.json"] = stamp(**stamp_fields)
+        self.make_core(version="0.0.0", files=files)
+        self.write_patch("2026-01-01-a", None, None, editions=LAYOUTS)
+
+    def test_install_stamp_names_the_version_and_commit(self):
+        self.patched_archive()
+        core = fn.core_info(self.ctx())
+        self.assertEqual((fn.display_version(core), core["identity"], core["identity_source"]),
+                         ("0.23.3", STAMP_COMMIT, "stamp"))
+        self.assertEqual(core["commit_date"], "2026-11-20")
+        self.assertEqual(self.status("2026-01-01-a")["status"], "OK")      # newest layout, not the fallback
+
+    def test_stamp_with_a_bom_is_read(self):
+        self.patched_archive()
+        path = self.core / "install-stamp.json"
+        path.write_bytes(b"\xef\xbb\xbf" + path.read_bytes())
+        self.assertEqual(fn.display_version(fn.core_info(self.ctx())), "0.23.3")
+
+    def test_placeholder_or_broken_stamp_is_not_a_version(self):
+        for label, body in (("all-zero commit", stamp(commit="0" * 40)),
+                            ("cut off mid-write", stamp()[:57]),
+                            ("empty file", ""),
+                            ("no release", stamp(baseVersion="unknown"))):
+            with self.subTest(label):
+                self.patched_archive(write=False)
+                (self.core / "install-stamp.json").write_text(body, encoding="utf-8")
+                r = self.status("2026-01-01-a")
+                self.assertEqual((r["status"], r["reason"]), ("UNKNOWN", "version_unknown"))
+
+    def test_unknown_version_does_not_pick_the_fallback_layout(self):
+        # Was MISSING: the fallback edition was chosen and gw/turn.py has no sign, a false alarm.
+        self.patched_archive(write=False)
+        r = self.status("2026-01-01-a")
+        self.assertEqual((r["status"], r["reason"]), ("UNKNOWN", "version_unknown"))
+        self.assertIn("--core-version", " ".join(r["evidence"]))           # says how to decide it
+        self.assertEqual(fn.display_version(fn.core_info(self.ctx())), "?")
+
+    def test_an_unbounded_first_edition_holds_for_any_version(self):
+        self.patched_archive(write=False)
+        self.write_patch("2026-01-02-b", "gw/persist.py", ["MYPATCH"])      # one edition, no bounds
+        self.assertEqual(self.status("2026-01-02-b")["status"], "OK")
+
+    def test_core_version_option(self):
+        self.patched_archive(write=False)
+        code, out, _ = self.run_cli("patches", "check", "--core-version", "0.23.3")
+        self.assertEqual(code, 0, out)
+        self.assertIn("core 0.23.3 (--core-version)", out)
+        code, out, _ = self.run_cli("--core-version", "0.22.0", "patches", "check")   # before the subcommand too
+        self.assertEqual(code, 2, out)                                      # 0.22.0 → fallback layout → MISSING
+        with self.assertRaises(SystemExit) as cm:                           # a usage error, as elsewhere
+            self.run_cli("patches", "check", "--core-version", "latest")
+        self.assertEqual(cm.exception.code, 1)
+
+
 class DriftTest(HomeCase):
     def test_not_git(self):
         self.make_core(files={"a.py": "x"})

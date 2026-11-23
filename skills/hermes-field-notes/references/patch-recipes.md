@@ -60,7 +60,7 @@ numbers; read the current code before editing.
 - **Symptom:** the chat receives a message that looks empty; logs show text of length > 0.
 - **Where:** `send()` in `plugins/platforms/telegram/adapter.py` (live adapter: streaming final,
   cron through the gateway, plugins) and the direct Telegram sender used by the `send_message` tool
-  and the standalone cron fallback (`tools/send_message_senders.py` on 0.21.5 and 0.21.6).
+  and the standalone cron fallback (`tools/send_message_senders.py` on 0.21.5 and 0.21.6, `gateway/outbound/senders.py` since 0.23.2).
 - **Edit:** the guard uses `not text.strip()`, and `strip()` keeps zero-width and other invisible
   characters (U+200B, U+200C, U+200D, U+FEFF, U+2060, U+2063, U+00AD, U+180E). Strip whitespace and
   those characters before the emptiness check, skip the send, log a warning with a `repr` preview.

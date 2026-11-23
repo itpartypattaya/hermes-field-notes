@@ -50,9 +50,11 @@ not apply rather than leaving them empty: an empty heading reads as "not checked
 ```
 
 The first edition whose bounds hold is used. Paths are relative to the hermes-agent root; `..`,
-absolute paths and symlinks leading outside are refused. Development builds report version
-`0.0.0`; the check then uses the version in the git tag (`git describe`), and if there is none,
-only an edition without bounds — otherwise the result is `UNKNOWN (version_unknown)`.
+absolute paths and symlinks leading outside are refused. `pyproject.toml` says `0.0.0` on every
+build, so the version comes from `--core-version`, else the git tag (`git describe`), else the
+`install-stamp.json` a packaged build (Docker, Nix, desktop app) carries. With none of them, the first
+edition is used only when it has no bounds; a bounded one first means `UNKNOWN (version_unknown)` —
+an unbounded edition after it is the fallback for other releases, not a safe guess.
 
 ## Index
 

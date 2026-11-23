@@ -36,7 +36,7 @@ import urllib.error  # noqa: E402
 import urllib.request  # noqa: E402
 from pathlib import Path  # noqa: E402
 
-VERSION = "1.2.6"
+VERSION = "1.3.0"
 SCHEMA_VERSION = 1
 SKILL_DIR = Path(__file__).resolve().parents[1]
 ASSETS = SKILL_DIR / "assets"
@@ -186,6 +186,7 @@ class Context:
         hroot = getattr(args, "hermes_root", None) or self.cfg.get("hermes_root") or str(self.home / "hermes-agent")
         self.hermes_root = Path(hroot).expanduser()
         self.read_only = bool(getattr(args, "read_only", False))
+        self.core_version = getattr(args, "core_version", None)
         self.state_path = self.home / "cache" / "field-notes-state.json"
         self.lock_path = self.home / "cache" / "field-notes.lock"
         self.tz, self.tz_ok = _tz(str(self.cfg.get("timezone") or "UTC"))
@@ -608,20 +609,53 @@ def core_info(ctx):
             m = re.match(r"^(.*)-(\d+)-g[0-9a-f]+$", desc)
             if m:
                 info.update(describe=desc, tag=m.group(1), ahead=int(m.group(2)))
-    elif text is not None:
-        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
-        info.update(identity="pyproject:" + digest[:16], identity_source="pyproject-hash", short=digest[:7])
+    else:
+        stamp = _install_stamp(root)
+        if stamp:
+            info.update(identity=stamp["commit"], identity_source="stamp", short=stamp["commit"][:7],
+                        commit_date=stamp.get("commit_date"), version_from_stamp=stamp.get("version"))
+        elif text is not None:
+            digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+            info.update(identity="pyproject:" + digest[:16], identity_source="pyproject-hash", short=digest[:7])
     # Version display: a dev build (0.0.0) is named by its tag when there is one.
     if info["version"] in (None, "0.0.0") and info["tag"]:
         m = re.search(r"v?(\d+\.\d+(?:\.\d+)?)", info["tag"])
         if m:
             info["version_from_tag"] = m.group(1)
+    if ctx.core_version:
+        info["version_given"] = ctx.core_version
     info["bootstrapped_at"] = _bootstrap_time(ctx.home, info["identity"])
     return info
 
 
+def _install_stamp(root):
+    """{commit, version, commit_date} from the build stamp Hermes reads when there is no .git (Docker, Nix,
+    desktop app: hermes_cli/version_info.py), or None. A placeholder commit of zeros is no provenance."""
+    try:
+        data = json.loads((root / "install-stamp.json").read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    commit = str(data.get("commit") or "")
+    if not re.match(r"^[0-9a-f]{40}$", commit) or set(commit) == {"0"}:
+        return None
+    base = str(data.get("baseVersion") or "")
+    when = data.get("commitDate")
+    return {"commit": commit, "version": base if re.match(r"^\d+\.\d+\.\d+$", base) else None,
+            "commit_date": dt.datetime.fromtimestamp(when, dt.timezone.utc).date().isoformat()
+            if isinstance(when, int) and not isinstance(when, bool) else None}
+
+
+def core_version(core):
+    """The release the core is, or None. pyproject says 0.0.0 on every build since 0.21.6."""
+    version = core.get("version")
+    return (core.get("version_given") or core.get("version_from_tag") or core.get("version_from_stamp")
+            or (version if version != "0.0.0" else None))
+
+
 def display_version(core):
-    return core.get("version_from_tag") or core.get("version") or "?"
+    return core_version(core) or "?"
 
 
 def _bootstrap_time(home, identity):
@@ -761,12 +795,12 @@ def validate_checks(data):
 def _edition_for(editions, version):
     """(edition, reason). First edition whose bounds hold wins."""
     vt = version_tuple(version) if version and version != "0.0.0" else None
-    bounded = [e for e in editions if (e.get("when") or {}).get("min_version") or (e.get("when") or {}).get("max_version")]
     if vt is None:
-        if not bounded:
-            return editions[0], None
-        unbounded = [e for e in editions if e not in bounded]
-        return (unbounded[0], None) if unbounded else (None, "version_unknown")
+        # An edition without bounds wins only when no bounded edition stands before it; otherwise it is
+        # the fallback for other releases, and picking it blind checks the wrong files.
+        first = editions[0]
+        bounded = (first.get("when") or {}).get("min_version") or (first.get("when") or {}).get("max_version")
+        return (None, "version_unknown") if bounded else (first, None)
     for ed in editions:
         when = ed.get("when") or {}
         lo, hi = version_tuple(when.get("min_version")), version_tuple(when.get("max_version"))
@@ -801,7 +835,7 @@ def check_patch(note, core, root):
         result["reason"] = "bad_checks"
         result["evidence"].extend(problems)
         return result
-    version = core.get("version_from_tag") or core.get("version")
+    version = core_version(core)
     edition, why = _edition_for(data["editions"], version)
     if edition is None:
         if why == "n/a":
@@ -809,6 +843,8 @@ def check_patch(note, core, root):
             result["evidence"].append(f"no edition applies to {version}")
         else:
             result["reason"] = "version_unknown"
+            result["evidence"].append("core release unknown (no git tag, no install-stamp.json): "
+                                      "name it with --core-version X.Y.Z")
         return result
     result["targets"] = [t["file"] for t in edition["targets"]]
     gone, unreadable, full, partial, absent = [], [], [], [], []
@@ -1144,14 +1180,14 @@ def fetch_upstream(ctx, core):
     if latest:
         info["latest"] = {"tag": latest.get("tag_name"), "version": _release_version(latest),
                           "date": str(latest.get("published_at") or "")[:10]}
-    sha = core.get("identity") if core.get("identity_source") == "git" else None
+    sha = core.get("identity") if core.get("identity_source") in ("git", "stamp") else None
     cmp = _compare(repo, latest["tag_name"], sha) if sha and latest else None
     if cmp is not None:
         info["relation"] = {"identical": "same", "ahead": "newer", "behind": "older",
                             "diverged": "diverged"}.get(cmp.get("status"))
         info["behind_release"] = cmp.get("behind_by")
-    elif latest and version_tuple(core.get("version")) and version_tuple(info["latest"]["version"]):
-        mine, theirs = version_tuple(core["version"]), version_tuple(info["latest"]["version"])
+    elif latest and version_tuple(core_version(core)) and version_tuple(info["latest"]["version"]):
+        mine, theirs = version_tuple(core_version(core)), version_tuple(info["latest"]["version"])
         info["relation"] = "same" if mine == theirs else ("newer" if mine > theirs else "older")
     cmp = _compare(repo, sha, branch) if sha and cmp is not None else None
     if cmp is not None:
@@ -2096,7 +2132,8 @@ def cmd_patches(ctx, args):
     if args.json:
         out_json({"core": {"version": display_version(core), "identity": core.get("identity")}, "patches": results})
     else:
-        print(f"core {display_version(core)} ({core.get('short')}) at {core['root']} — static check, the tree on disk")
+        named = "--core-version" if core.get("version_given") else core.get("short")
+        print(f"core {display_version(core)} ({named}) at {core['root']} — static check, the tree on disk")
         for r in sorted(results, key=lambda r: STATUS_ORDER.get(r["status"], 9)):
             reason = f" ({r['reason']})" if r.get("reason") else ""
             print(f"{STATUS_ICON[r['status']]} {r['status']}{reason}  {r['short']}  [{r['id']}]")
@@ -2370,6 +2407,12 @@ class _Parser(argparse.ArgumentParser):
         self.exit(EXIT_ERR, f"{self.prog}: error: {message}\n")
 
 
+def _release_arg(text):
+    if not re.match(r"^\d+\.\d+\.\d+$", text):
+        raise argparse.ArgumentTypeError(f"{text!r} is not a release number X.Y.Z")
+    return text
+
+
 def build_parser():
     ap = _Parser(prog="fieldnotes.py", description=__doc__.split("\n\n")[0])
     ap.add_argument("--version", action="version", version=f"hermes-field-notes {VERSION}")
@@ -2380,6 +2423,8 @@ def build_parser():
         parser.add_argument("--root", help="notes store (default: <hermes-home>/field-notes)", **extra)
         parser.add_argument("--hermes-root", help="hermes-agent checkout (default: <hermes-home>/hermes-agent)",
                             **extra)
+        parser.add_argument("--core-version", type=_release_arg, metavar="X.Y.Z",
+                            help="the core's release, for a tree without .git or install stamp", **extra)
         parser.add_argument("--read-only", action="store_true", help="write nothing, use no network", **extra)
         parser.add_argument("--json", action="store_true", help="machine-readable output", **extra)
 

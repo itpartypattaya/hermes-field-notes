@@ -1,10 +1,10 @@
 ---
 name: hermes-field-notes
 description: "Record Hermes bugs and pitfalls; check local core patches."
-version: 1.2.6
+version: 1.3.0
 author: "Anton Vaskov (itpartypattaya), https://t.me/passone"
 license: MIT
-compatibility: Hermes Agent >= 0.21 (checked against 0.22.0)
+compatibility: Hermes Agent >= 0.21 (scripts checked against 0.23.3, pitfalls against 0.22.0)
 allowed-tools: terminal read_file write_file patch
 tags: [debugging, pitfalls, patches, hermes-update, knowledge, dashboard]
 ---
@@ -58,6 +58,8 @@ scripts — it records, verifies and reminds.
 
 Add `--read-only` to guarantee no writes and no network (`tick`, the cron entry point, refuses it);
 `--json` for machine output. Both work before or after the command (`--read-only doctor` = `doctor --read-only`).
+A core without `.git` (Docker, Nix, the desktop app) is named by its `install-stamp.json`; for a bare copy
+such as `git archive`, say the release with `--core-version X.Y.Z`, or bounded patches stay `UNKNOWN (version_unknown)`.
 
 ## Quick Reference
 

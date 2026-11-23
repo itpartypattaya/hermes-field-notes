@@ -75,7 +75,7 @@ python3 ~/.hermes/skills/hermes-field-notes/scripts/install_cron.py --dry-run
 python3 ~/.hermes/skills/hermes-field-notes/scripts/install_cron.py
 ```
 
-Нужно: Hermes Agent ≥ 0.21 (проверено на 0.22.0), Python 3.11+, только стандартная библиотека.
+Нужно: Hermes Agent ≥ 0.21 (скрипты проверены на 0.23.3, грабли — на 0.22.0), Python 3.11+, только стандартная библиотека.
 Для проверки патчей ядро должно лежать каталогом; для `drift` — ещё и быть git-чекаутом.
 
 ## Как пользоваться
@@ -94,6 +94,8 @@ python3 $FN dashboard --format md
 ```
 
 `--read-only` гарантирует: ни записи, ни сети (`tick`, точка входа cron, его не принимает).
+Без `.git` версию ядра даёт его `install-stamp.json` (Docker, Nix, десктоп-приложение); для голой копии добавьте
+`--core-version X.Y.Z`.
 
 ![The life of one patch: a bugfix lives until the core fixes it; a customization stays local forever](docs/patch-lifecycle.png)
 

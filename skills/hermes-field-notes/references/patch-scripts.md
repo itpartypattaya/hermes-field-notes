@@ -19,7 +19,8 @@ yourself), and register it with a patch note so the skill can tell when it is mi
 4. **Back up before writing** (`file.py.pre-<patch-name>`), write atomically, then run
    `python3 -m py_compile file.py`; on a compile error restore the backup.
 5. **Know the version.** Read `version` from `pyproject.toml`. Development builds say `0.0.0` —
-   do not treat that as "newer than everything"; use the git tag or the SHA. Give the script one
+   do not treat that as "newer than everything"; use the git tag or the SHA (without `.git`: `baseVersion`
+   and `commit` in `install-stamp.json`). Give the script one
    branch per range of versions where the anchors differ, and mirror those ranges as `editions`
    in the checks file.
 6. **Detect the upstream fix.** If the core already contains the fix, print "fixed upstream" and

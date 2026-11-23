@@ -74,7 +74,7 @@ python3 ~/.hermes/skills/hermes-field-notes/scripts/install_cron.py --dry-run
 python3 ~/.hermes/skills/hermes-field-notes/scripts/install_cron.py
 ```
 
-Requirements: Hermes Agent ≥ 0.21 (checked against 0.22.0), Python 3.11+, standard library only.
+Requirements: Hermes Agent ≥ 0.21 (scripts checked against 0.23.3, pitfalls against 0.22.0), Python 3.11+, standard library only.
 Patch checks need the core as a directory; `drift` additionally needs it to be a git checkout.
 
 ## Using it
@@ -93,6 +93,8 @@ python3 $FN dashboard --format md
 ```
 
 `--read-only` guarantees no writes and no network (the cron entry point `tick` refuses it).
+Without `.git` the core is named by its `install-stamp.json` (Docker, Nix, desktop app); for a bare copy add
+`--core-version X.Y.Z`.
 
 ### Example: `doctor` after an update
 

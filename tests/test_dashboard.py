@@ -5,10 +5,18 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
+import stat
 import unittest
 import urllib.error
 
 from _helpers import HomeCase, fn
+
+def _writable(func, path, _exc):
+    """git keeps its objects read-only; Windows refuses to delete them until they are writable."""
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
+
 
 TOKEN = "123456789:" + "A" * 35
 
@@ -414,6 +422,33 @@ class AgyUpstreamTest(UpstreamTest):
         self.assertEqual((info["latest"]["version"], info["relation"]), ("0.21.5", "same"))
         self.assertIsNone(info["behind_main"])
         self.assertEqual(sum("compare/" in c for c in self.calls), 1)   # no second compare for main
+
+    def test_dev_build_version_is_not_older_than_the_release(self):
+        # 1.3.0: the fallback compared pyproject's 0.0.0 and called every such core "older".
+        (self.core / "pyproject.toml").write_text('[project]\nversion = "0.0.0"\n', encoding="utf-8")
+        self.git("-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qam", "dev")
+        self.git("tag", "-d", "v0.21.5")
+
+        def fake(path, timeout=15):
+            if "releases" in path:
+                return self.releases
+            raise urllib.error.HTTPError(f"https://api.github.com/{path}", 404, "Not Found", None, None)
+        fn.GITHUB_GET = fake
+        ctx = self.ctx()
+        info, _ = fn.upstream_info(ctx, fn.load_state(ctx), fn.core_info(ctx))
+        self.assertIsNone(info["relation"])
+
+    def test_install_stamp_commit_is_compared_with_the_release(self):
+        shutil.rmtree(self.core / ".git", onerror=_writable)
+        (self.core / "pyproject.toml").write_text('[project]\nversion = "0.0.0"\n', encoding="utf-8")
+        sha = "caafe5389ae585ef77387a962aee05b1bcf17029"
+        (self.core / "install-stamp.json").write_text(json.dumps(
+            {"commit": sha, "baseVersion": "0.21.5", "updateMechanism": "docker", "payload": "full"}),
+            encoding="utf-8")
+        ctx = self.ctx()
+        info, _ = fn.upstream_info(ctx, fn.load_state(ctx), fn.core_info(ctx))
+        self.assertIn(f"repos/NousResearch/hermes-agent/compare/v2026.9.24...{sha}", self.calls)
+        self.assertEqual((info["relation"], info["behind_main"]), ("newer", 3285))
 
     def test_dashboard_view_saves_the_fetched_answer(self):
         self.run_cli("dashboard", "--format", "text")
